@@ -1,14 +1,25 @@
 import streamlit as st
 import pandas as pd
+import re
 
-# módulos
 from modules.ingestion import load_excel
 from modules.parser import parse_sections
 from modules.classification import normalize_columns
-from modules.analytics import analizar_factura_bidafarma
-from modules.cost_engine import apply_costs
+from modules.analytics import analizar_factura_bidafarma, analizar_factura_transfer
 
-condiciones = {}
+# =========================
+# NORMALIZADOR GLOBAL
+# =========================
+
+def normalizar_albaran(valor):
+    valor = str(valor).lower().strip()
+    match = re.match(r"^[a-z]{0,3}-?\d+$", valor)
+
+    if match:
+        return re.sub(r"[^\d]", "", valor)
+
+    return valor
+
 df = None
 proveedores_detectados = []
 
@@ -16,277 +27,224 @@ st.set_page_config(layout="wide")
 st.title("📊 Auditoría de Compras Farmacia")
 
 # =========================
-# 1. SUBIDA DE ALBARANES
+# 1. ALBARANES
 # =========================
 
 st.header("1️⃣ Subida de albaranes")
 
-uploaded_files = st.file_uploader(
-    "Sube uno o varios albaranes",
-    type=["xlsx"],
-    accept_multiple_files=True
-)
+col1, col2 = st.columns(2)
 
+with col1:
+    uploaded_files = st.file_uploader(
+        "📦 Albaranes BIDAFARMA (goteo)",
+        type=["xlsx"],
+        accept_multiple_files=True
+    )
+
+with col2:
+    uploaded_transfer = st.file_uploader(
+        "🚚 Albaranes TRANSFER",
+        type=["xlsx"],
+        accept_multiple_files=True,
+        key="transfer"
+    )
+
+dfs = []
+
+# GOTE0
 if uploaded_files:
-
-    dfs = []
-
     for uploaded_file in uploaded_files:
+        df_temp = normalize_columns(load_excel(uploaded_file))
+        df_temp.columns = [c.lower().strip() for c in df_temp.columns]
 
-        try:
-            df_temp = load_excel(uploaded_file)
-            df_temp = normalize_columns(df_temp)
+        df_temp["proveedor"] = "bidafarma"
+        df_temp["tipo_compra"] = "goteo"
 
-            df_temp.columns = [c.lower().strip() for c in df_temp.columns]
+        col_albaran = next((c for c in df_temp.columns if "albaran" in c), None)
 
-            nombre_archivo = uploaded_file.name.lower()
+        if col_albaran:
+            df_temp["albaran"] = df_temp[col_albaran].apply(normalizar_albaran)
 
-            proveedor = "desconocido"
-            if "bidafarma" in nombre_archivo:
-                proveedor = "bidafarma"
-            elif "cofares" in nombre_archivo:
-                proveedor = "cofares"
+        df_temp = parse_sections(df_temp)
+        dfs.append(df_temp)
 
-            df_temp["proveedor"] = proveedor
+# TRANSFER
+if uploaded_transfer:
+    for uploaded_file in uploaded_transfer:
+        df_temp = normalize_columns(load_excel(uploaded_file))
+        df_temp.columns = [c.lower().strip() for c in df_temp.columns]
 
-            # detectar albarán real
-            col_albaran = None
-            for col in df_temp.columns:
-                if "albaran" in col:
-                    col_albaran = col
-                    break
+        df_temp["proveedor"] = "bidafarma"
+        df_temp["tipo_compra"] = "transfer"
 
-            if col_albaran:
-                df_temp["albaran"] = df_temp[col_albaran]
-            else:
-                df_temp["albaran"] = uploaded_file.name
+        col_albaran = next((c for c in df_temp.columns if "albaran" in c), None)
 
-            df_temp = parse_sections(df_temp)
+        if col_albaran:
+            df_temp["albaran"] = df_temp[col_albaran].apply(normalizar_albaran)
 
-            dfs.append(df_temp)
+        df_temp = parse_sections(df_temp)
+        dfs.append(df_temp)
 
-        except Exception as e:
-            st.error(f"Error procesando archivo {uploaded_file.name}: {e}")
-
-    if dfs:
-        df = pd.concat(dfs, ignore_index=True)
-        proveedores_detectados = df["proveedor"].dropna().unique().tolist()
-
-        st.subheader("📍 Proveedores detectados")
-        st.write(proveedores_detectados)
+if dfs:
+    df = pd.concat(dfs, ignore_index=True)
 
 # =========================
-# VISTA POR PROVEEDOR
+# VISTAS
 # =========================
 
-if df is not None and "proveedor" in df.columns:
+if df is not None:
 
-    proveedores_detectados = df["proveedor"].dropna().unique().tolist()
+    for tipo in ["goteo", "transfer"]:
 
-    for proveedor in proveedores_detectados:
+        df_tipo = df[df["tipo_compra"] == tipo]
 
-        df_prov = df[df["proveedor"] == proveedor].copy()
-
-        if df_prov.empty:
+        if df_tipo.empty:
             continue
 
-        # =========================
-        # COLUMNAS DERIVADAS
-        # =========================
+        titulo = "📦 Goteo" if tipo == "goteo" else "🚚 Transfer"
+        st.header(f"{titulo}")
 
-        df_prov["es_abono"] = df_prov["neto"] < 0
+        st.dataframe(df_tipo)
 
-        df_prov["precio_unitario"] = df_prov["neto"] / df_prov["unidades"]
-        df_prov["precio_unitario"] = df_prov["precio_unitario"].replace([float("inf"), -float("inf")], 0)
+        df_tipo["es_abono"] = df_tipo["neto"] < 0
+        abonos = df_tipo[df_tipo["es_abono"]]
 
-        df_prov["tiene_descuento"] = (df_prov["bruto"] - df_prov["neto"]) > 0
+        total_bruto = df_tipo["bruto"].sum()
+        total_neto = df_tipo["neto"].sum()
+        total_abonos = abonos["neto"].sum()
 
-        # =========================
-        # 👉 TIPO OPERACIÓN (OCULTO)
-        # =========================
+        descuento = (total_bruto - total_neto) / total_bruto * 100 if total_bruto else 0
 
-        df_prov["_tipo_operacion"] = "goteo"
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
 
-        df_prov.loc[
-            df_prov["seccion_albaran"] == "bitransfer",
-            "_tipo_operacion"
-        ] = "bitransfer"
+        c1.metric("Líneas", len(df_tipo))
+        c2.metric("Unidades", int(df_tipo["unidades"].sum()))
+        c3.metric("Bruto", f"{total_bruto:.1f} €")
+        c4.metric("Neto", f"{total_neto:.1f} €")
+        c5.metric("Desc %", round(descuento, 2))
+        c6.metric("Abonos", f"{abs(total_abonos):.1f} €")
 
-        df_prov.loc[
-            df_prov["descripcion"].str.contains("club", case=False, na=False),
-            "_tipo_operacion"
-        ] = "club"
+# =========================
+# 2. FACTURAS
+# =========================
 
-        df_prov.loc[
-            df_prov["neto"] < 0,
-            "_tipo_operacion"
-        ] = "abono"
+if df is not None:
 
-        compras_df = df_prov[~df_prov["es_abono"]]
-        abonos_df = df_prov[df_prov["es_abono"]]
+    st.header("2️⃣ Facturas")
 
-        # =========================
-        # UI
-        # =========================
+    # -------------------------
+    # FACTURA NORMAL
+    # -------------------------
+    factura_normal = st.file_uploader("Factura NORMAL", type=["xlsx"])
 
-        st.header(f"📦 Compras - {proveedor.upper()}")
+    resultado = None
 
-        st.subheader("📄 Vista consolidada")
+    if factura_normal:
 
-        # 👉 ocultamos columnas internas
-        df_display = df_prov.drop(columns=["_tipo_operacion"], errors="ignore")
-        st.dataframe(df_display)
+        resultado = analizar_factura_bidafarma(factura_normal)
 
-        st.subheader("📊 Resumen general")
+        df_goteo = df[df["tipo_compra"] == "goteo"]
 
-        total_bruto = df_prov["bruto"].sum()
-        total_neto = df_prov["neto"].sum()
-        total_abonos = abonos_df["neto"].sum()
+        albaranes_factura = set(resultado["albaranes"])
+        albaranes_df = set(df_goteo["albaran"].apply(normalizar_albaran))
 
-        descuento_medio = 0
-        if total_bruto > 0:
-            descuento_medio = (total_bruto - total_neto) / total_bruto * 100
+        faltan = albaranes_df - albaranes_factura
+        sobran = albaranes_factura - albaranes_df
 
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
-
-        col1.metric("Nº líneas", len(df_prov))
-        col2.metric("Unidades", int(df_prov["unidades"].sum()))
-        col3.metric("Bruto (€)", round(total_bruto, 2))
-        col4.metric("Neto (€)", round(total_neto, 2))
-        col5.metric("Desc. medio (%)", round(descuento_medio, 2))
-        col6.metric("Abonos (€)", round(abs(total_abonos), 2))
-
-        # =========================
-        # TIPOS DE LÍNEA
-        # =========================
-
-        st.subheader("📊 Tipos de línea")
-
-        if proveedor == "bidafarma":
-
-            categorias = {
-                "bitransfer": df_prov["seccion_albaran"] == "bitransfer",
-                "avantia": df_prov["seccion_albaran"] == "avantia",
-                "especialidad": df_prov["iva"] <= 4,
-                "parafarmacia": df_prov["iva"] > 4,
-                "club": df_prov["descripcion"].str.contains("club", case=False, na=False)
-            }
-
-        elif proveedor == "cofares":
-
-            categorias = {
-                "nexo": df_prov["seccion_albaran"] == "nexo",
-                "transfer_diferido": df_prov["seccion_albaran"] == "bitransfer",
-                "especialidad": df_prov["iva"] <= 4,
-                "parafarmacia": df_prov["iva"] > 4
-            }
-
+        if not faltan and not sobran:
+            st.success("✅ Albaranes NORMAL conciliados")
         else:
+            if faltan:
+                st.error(f"Faltan: {faltan}")
+            if sobran:
+                st.warning(f"Sobran: {sobran}")
 
-            categorias = {
-                "otros": df_prov["seccion_albaran"].notna()
-            }
+        st.subheader("💸 Gastos factura normal")
+        st.dataframe(resultado["gastos"])
 
-        filas = []
+        resumen = resultado.get("resumen_costes")
 
-        for nombre, filtro in categorias.items():
+        if resumen:
+            st.subheader("💰 Coste total factura normal")
 
-            df_temp = df_prov[filtro]
+            col1, col2, col3 = st.columns(3)
 
-            bruto = df_temp["bruto"].sum()
-            neto = df_temp["neto"].sum()
+            col1.metric("Base", f"{resumen['base']} €")
+            col2.metric("IVA (21%)", f"{resumen['iva']} €")
+            col3.metric("TOTAL", f"{resumen['total']} €")
 
-            descuento = 0
-            if bruto > 0:
-                descuento = (bruto - neto) / bruto * 100
+        # BITRANSFER
+        df_bida = df[df["proveedor"] == "bidafarma"]
 
-            filas.append({
-                "categoria": nombre,
-                "n_lineas": len(df_temp),
-                "unidades": df_temp["unidades"].sum(),
-                "bruto": round(bruto, 2),
-                "neto": round(neto, 2),
-                "descuento_pct": round(descuento, 2)
-            })
+        hay_bitransfer = False
+        if "seccion_albaran" in df_bida.columns:
+            hay_bitransfer = (df_bida["seccion_albaran"] == "bitransfer").any()
 
-        resumen_tipo = pd.DataFrame(filas)
-        st.dataframe(resumen_tipo)
+        hay_gestion = False
+        if resultado and not resultado["gastos"].empty:
+            hay_gestion = (resultado["gastos"]["tipo"] == "gestion").any()
 
-# =========================
-# 2. CONDICIONES PROVEEDORES
-# =========================
+        if hay_bitransfer and hay_gestion:
 
-if proveedores_detectados and df is not None:
+            st.subheader("🔍 Desglose gastos gestión Bitransfer")
 
-    st.header("2️⃣ Condiciones y ajustes por proveedor")
+            excel_bitransfer = st.file_uploader(
+                "Excel Bitransfer",
+                type=["xlsx"],
+                key="bitransfer_excel"
+            )
 
-    for proveedor in proveedores_detectados:
+            if excel_bitransfer:
+                df_bt = pd.read_excel(excel_bitransfer)
+                st.dataframe(df_bt.head())
 
-        st.subheader(f"⚙️ {proveedor.upper()}")
+    # -------------------------
+    # FACTURA TRANSFER
+    # -------------------------
+    factura_transfer = st.file_uploader("Factura TRANSFER", type=["xlsx"])
 
-        if proveedor == "bidafarma":
+    if factura_transfer:
 
-            col1, col2 = st.columns(2)
+        resultado_transfer = analizar_factura_transfer(factura_transfer)
 
-            with col1:
-                factura_transfer = st.file_uploader("Factura TRANSFER", type=["xlsx"], key="transfer_bida")
+        df_transfer = df[df["tipo_compra"] == "transfer"]
 
-            with col2:
-                factura_normal = st.file_uploader("Factura NORMAL", type=["xlsx"], key="normal_bida")
+        albaranes_factura = set(resultado_transfer["albaranes"])
+        albaranes_df = set(df_transfer["albaran"].apply(normalizar_albaran))
 
-            col3, col4 = st.columns(2)
+        faltan = albaranes_df - albaranes_factura
+        sobran = albaranes_factura - albaranes_df
 
-            with col3:
-                bitransfer_pct = st.number_input("Cargo Bitransfer (%)", value=1.7)
+        if not faltan and not sobran:
+            st.success("✅ Albaranes TRANSFER conciliados")
+        else:
+            if faltan:
+                st.error(f"Faltan en transfer: {faltan}")
+            if sobran:
+                st.warning(f"Sobran en transfer: {sobran}")
 
-            with col4:
-                descuento_general = st.number_input("Descuento general (%)", value=0.0)
+        st.subheader("🚚 Servicios logísticos")
+        st.dataframe(resultado_transfer["gastos"])
 
-            condiciones["bidafarma"] = {
-                "bitransfer_pct": bitransfer_pct,
-                "descuento": descuento_general
-            }
+        st.subheader("🏭 Abonos laboratorios")
+        st.dataframe(resultado_transfer["abonos"])
 
-        elif proveedor == "cofares":
+        resumen = resultado_transfer.get("resumen_logistica")
 
-            icc_file = st.file_uploader("ICC Cofares", type=["xlsx"], key="icc_cofares")
+        if resumen:
+            st.subheader("💰 Coste total logística")
 
-            base_icc = 0
-            pct_franquicia = 0
+            col1, col2, col3 = st.columns(3)
 
-            if icc_file:
-                icc_df = pd.read_excel(icc_file)
-                icc_df.columns = [c.lower().strip() for c in icc_df.columns]
-
-                try:
-                    base_icc = float(icc_df.loc[icc_df["concepto"] == "base icc", "valor"].values[0])
-                    pct_franquicia = float(icc_df.loc[icc_df["concepto"] == "% franquicia", "valor"].values[0])
-                    st.success(f"Base ICC: {base_icc} | % Franquicia: {pct_franquicia}")
-                except:
-                    st.error("Error leyendo ICC")
-
-            condiciones["cofares"] = {
-                "base_icc": base_icc,
-                "pct_franquicia": pct_franquicia
-            }
+            col1.metric("Base", f"{resumen['base']} €")
+            col2.metric("IVA (21%)", f"{resumen['iva']} €")
+            col3.metric("TOTAL", f"{resumen['total']} €")
 
 # =========================
-# 3. MOTOR DE COSTES
-# =========================
-
-if condiciones and df is not None:
-
-    df_resultado = apply_costs(df.copy(), condiciones)
-
-    st.header("3️⃣ Resultado con costes ajustados")
-    st.dataframe(df_resultado)
-
-# =========================
-# ESTADO INICIAL
+# INICIO
 # =========================
 
 if df is None:
-    st.warning("⚠️ Sube al menos un archivo para empezar")
-
+    st.warning("Sube archivos")
 
 
