@@ -57,7 +57,6 @@ def analizar_factura_bidafarma(file):
         if any(x in texto for x in ["servicio", "gestion", "gestión", "avantia"]):
             leyendo_albaranes = False
 
-        # ALBARANES
         if leyendo_albaranes and col_albaran:
             valor = str(row[col_albaran]).strip()
             num = extraer_numero_albaran(valor)
@@ -70,16 +69,20 @@ def analizar_factura_bidafarma(file):
         # IMPORTE ROBUSTO
         importe = None
 
-        if "importe" in df.columns:
-            try:
-                importe = float(str(row["importe"]).replace(",", "."))
-            except:
-                pass
+        for col in df.columns:
+            if any(x in col for x in ["importe", "total", "base"]):
+                try:
+                    val = str(row[col]).replace(",", ".").replace("€", "").strip()
+                    importe = float(val)
+                    break
+                except:
+                    continue
 
         if importe is None:
-            for v in reversed(valores):
+            numeros = re.findall(r"-?\d+[.,]?\d*", texto)
+            for num in reversed(numeros):
                 try:
-                    importe = float(str(v).replace(",", "."))
+                    importe = float(num.replace(",", "."))
                     break
                 except:
                     continue
@@ -89,7 +92,6 @@ def analizar_factura_bidafarma(file):
 
         texto_limpio = limpiar_texto(texto)
 
-        # GASTOS
         if "servicio" in texto:
             gastos.append({
                 "tipo": "servicios",
@@ -112,7 +114,6 @@ def analizar_factura_bidafarma(file):
             })
 
     total_gastos = sum([g["importe"] for g in gastos])
-
     iva = total_gastos * 0.21
     total_final = total_gastos + iva
 
@@ -158,9 +159,7 @@ def analizar_factura_transfer(file):
         if any(x in texto for x in ["log", "abono", "laboratorio"]):
             leyendo_albaranes = False
 
-        # =========================
-        # ALBARANES (CORREGIDO)
-        # =========================
+        # ALBARANES
         if leyendo_albaranes and col_albaran:
             valor = str(row[col_albaran]).strip()
             num = extraer_numero_albaran(valor)
@@ -171,20 +170,27 @@ def analizar_factura_transfer(file):
             continue
 
         # =========================
-        # IMPORTE ROBUSTO (CORREGIDO)
+        # IMPORTE ROBUSTO (FIX)
         # =========================
         importe = None
 
-        if "importe" in df.columns:
-            try:
-                importe = float(str(row["importe"]).replace(",", "."))
-            except:
-                pass
-
-        if importe is None:
-            for v in reversed(valores):
+        # 1. columnas típicas
+        for col in df.columns:
+            if any(x in col for x in ["importe", "total", "base"]):
                 try:
-                    importe = float(str(v).replace(",", "."))
+                    val = str(row[col]).replace(",", ".").replace("€", "").strip()
+                    importe = float(val)
+                    break
+                except:
+                    continue
+
+        # 2. fallback regex
+        if importe is None:
+            numeros = re.findall(r"-?\d+[.,]?\d*", texto)
+
+            for num in reversed(numeros):
+                try:
+                    importe = float(num.replace(",", "."))
                     break
                 except:
                     continue
@@ -192,19 +198,15 @@ def analizar_factura_transfer(file):
         if importe is None:
             continue
 
-        # =========================
-        # LOGÍSTICA (MEJOR DETECCIÓN)
-        # =========================
-        if "log" in texto or "servicio" in texto:
+        # LOGÍSTICA
+        if "log" in texto or "logistico" in texto:
             gastos.append({
                 "tipo": "logistica",
                 "concepto": "servicios logisticos",
                 "importe": round(importe, 2)
             })
 
-        # =========================
-        # ABONOS LIMPIOS
-        # =========================
+        # ABONOS
         elif "abono" in texto or "laboratorio" in texto:
             abonos.append({
                 "tipo": "abono",
