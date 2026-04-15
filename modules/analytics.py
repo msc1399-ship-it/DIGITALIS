@@ -8,7 +8,6 @@ import re
 def extraer_numero_albaran(texto):
     texto = str(texto).lower().strip()
 
-    # admite: 123, VA-123, ML-123, ZV-123
     match = re.match(r"^[a-z]{0,3}-?\d+$", texto)
 
     if match:
@@ -40,12 +39,7 @@ def analizar_factura_bidafarma(file):
     albaranes = []
     gastos = []
 
-    # detectar columna albarán
-    col_albaran = None
-    for col in df.columns:
-        if "albaran" in col:
-            col_albaran = col
-            break
+    col_albaran = next((c for c in df.columns if "albaran" in c), None)
 
     leyendo_albaranes = True
 
@@ -57,42 +51,35 @@ def analizar_factura_bidafarma(file):
 
         texto = " ".join(valores).lower()
 
-        # cortar cuando empiezan gastos
+        if len(texto) < 5:
+            continue
+
         if any(x in texto for x in ["servicio", "gestion", "gestión", "avantia"]):
             leyendo_albaranes = False
 
-        # =========================
         # ALBARANES
-        # =========================
         if leyendo_albaranes and col_albaran:
-
             valor = str(row[col_albaran]).strip()
             num = extraer_numero_albaran(valor)
-
             if num:
                 albaranes.append(num)
 
-        # =========================
-        # IGNORAR IVA / TOTALES
-        # =========================
         if any(x in texto for x in ["iva", "recargo", "total"]):
             continue
 
-        # =========================
-        # IMPORTE
-        # =========================
+        # IMPORTE ROBUSTO
         importe = None
 
         if "importe" in df.columns:
             try:
-                importe = float(row["importe"])
+                importe = float(str(row["importe"]).replace(",", "."))
             except:
                 pass
 
         if importe is None:
-            for v in valores:
+            for v in reversed(valores):
                 try:
-                    importe = float(v)
+                    importe = float(str(v).replace(",", "."))
                     break
                 except:
                     continue
@@ -102,33 +89,27 @@ def analizar_factura_bidafarma(file):
 
         texto_limpio = limpiar_texto(texto)
 
-        # =========================
         # GASTOS
-        # =========================
         if "servicio" in texto:
             gastos.append({
                 "tipo": "servicios",
                 "concepto": texto_limpio,
-                "importe": round(float(importe), 2)
+                "importe": round(importe, 2)
             })
 
         elif "gestion" in texto or "gestión" in texto:
             gastos.append({
                 "tipo": "gestion",
                 "concepto": "gastos de gestión",
-                "importe": round(float(importe), 2)
+                "importe": round(importe, 2)
             })
 
         elif "avantia" in texto:
             gastos.append({
                 "tipo": "avantia",
                 "concepto": "cuota avantia",
-                "importe": round(float(importe), 2)
+                "importe": round(importe, 2)
             })
-
-    # =========================
-    # RESUMEN COSTES NORMAL
-    # =========================
 
     total_gastos = sum([g["importe"] for g in gastos])
 
@@ -159,12 +140,7 @@ def analizar_factura_transfer(file):
     gastos = []
     abonos = []
 
-    # detectar columna albarán
-    col_albaran = None
-    for col in df.columns:
-        if "albaran" in col:
-            col_albaran = col
-            break
+    col_albaran = next((c for c in df.columns if "albaran" in c), None)
 
     leyendo_albaranes = True
 
@@ -176,42 +152,39 @@ def analizar_factura_transfer(file):
 
         texto = " ".join(valores).lower()
 
-        # cortar cuando empiezan gastos transfer
+        if len(texto) < 5:
+            continue
+
         if any(x in texto for x in ["log", "abono", "laboratorio"]):
             leyendo_albaranes = False
 
         # =========================
-        # ALBARANES
+        # ALBARANES (CORREGIDO)
         # =========================
         if leyendo_albaranes and col_albaran:
-
             valor = str(row[col_albaran]).strip()
             num = extraer_numero_albaran(valor)
-
             if num:
                 albaranes.append(num)
 
-        # =========================
-        # IGNORAR IVA
-        # =========================
         if any(x in texto for x in ["iva", "recargo", "total"]):
             continue
 
         # =========================
-        # IMPORTE
+        # IMPORTE ROBUSTO (CORREGIDO)
         # =========================
         importe = None
 
         if "importe" in df.columns:
             try:
-                importe = float(row["importe"])
+                importe = float(str(row["importe"]).replace(",", "."))
             except:
                 pass
 
         if importe is None:
-            for v in valores:
+            for v in reversed(valores):
                 try:
-                    importe = float(v)
+                    importe = float(str(v).replace(",", "."))
                     break
                 except:
                     continue
@@ -220,28 +193,24 @@ def analizar_factura_transfer(file):
             continue
 
         # =========================
-        # LOGÍSTICA
+        # LOGÍSTICA (MEJOR DETECCIÓN)
         # =========================
-        if "log" in texto:
+        if "log" in texto or "servicio" in texto:
             gastos.append({
                 "tipo": "logistica",
                 "concepto": "servicios logisticos",
-                "importe": round(float(importe), 2)
+                "importe": round(importe, 2)
             })
 
         # =========================
-        # ABONOS (LIMPIOS)
+        # ABONOS LIMPIOS
         # =========================
         elif "abono" in texto or "laboratorio" in texto:
             abonos.append({
                 "tipo": "abono",
                 "concepto": limpiar_concepto_abono(texto),
-                "importe": round(float(importe), 2)
+                "importe": round(importe, 2)
             })
-
-    # =========================
-    # RESUMEN LOGÍSTICA
-    # =========================
 
     total_logistica = sum([g["importe"] for g in gastos])
     total_abonos = sum([a["importe"] for a in abonos])
