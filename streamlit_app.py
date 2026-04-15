@@ -1,16 +1,11 @@
-import sys
-import os
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "modules"))
-
 import streamlit as st
 import pandas as pd
 import re
 
-from ingestion import load_excel
-from parser import parse_sections
-from classification import normalize_columns
-from analytics import analizar_factura_bidafarma, analizar_factura_transfer
+from modules.ingestion import load_excel
+from modules.parser import parse_sections
+from modules.classification import normalize_columns
+from modules.analytics import analizar_factura_bidafarma, analizar_factura_transfer
 
 # =========================
 # NORMALIZADOR GLOBAL
