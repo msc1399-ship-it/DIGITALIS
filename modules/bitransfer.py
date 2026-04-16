@@ -27,6 +27,10 @@ def _normalizar_numero(valor):
 
     if "," in texto and "." in texto:
         texto = texto.replace(".", "").replace(",", ".")
+    elif "." in texto:
+        parte_decimal = texto.rsplit(".", 1)[1]
+        if len(parte_decimal) == 3:
+            texto = texto.replace(".", "")
     else:
         texto = texto.replace(",", ".")
 
@@ -34,6 +38,15 @@ def _normalizar_numero(valor):
         return float(texto)
     except ValueError:
         return None
+
+
+def _extraer_numero_en_texto(valor):
+    texto = str(valor)
+    match = re.search(r"-?\d+(?:[.,]\d+)?", texto)
+    if not match:
+        return None
+
+    return _normalizar_numero(match.group(0))
 
 
 def _normalizar_cn(valor):
@@ -64,6 +77,68 @@ def _buscar_columna(columnas, opciones):
             return col_original
 
     return None
+
+
+def _mapear_encabezados(fila):
+    alias = {
+        "tipo": ["tipo", "plataforma"],
+        "venta_bruta": ["venta bruta", "bruto"],
+        "pva": ["pva"],
+        "pvl": ["pvl"],
+        "descuento_pct": ["descuento %", "dto %"],
+        "descuento_eur": ["descuento eur", "descuento €", "dto €"],
+        "cargo_pct": ["cargo %", "gasto %"],
+        "cargo_eur": ["cargo eur", "cargo €", "gasto €"],
+        "rentabilidad_pct": ["rentabilidad %", "margen %"],
+    }
+
+    encabezados = {}
+
+    for indice, valor in enumerate(fila):
+        texto = _normalizar_texto(valor)
+        if not texto or texto == "nan":
+            continue
+
+        for nombre, opciones in alias.items():
+            if any(_normalizar_texto(opcion) == texto for opcion in opciones):
+                encabezados[nombre] = indice
+
+    return encabezados
+
+
+def _valor_fila(fila, encabezados, nombre):
+    indice = encabezados.get(nombre)
+    if indice is None or indice >= len(fila):
+        return None
+
+    return fila.iloc[indice]
+
+
+def _normalizar_tipo_bitransfer(valor):
+    texto = _normalizar_texto(valor)
+
+    if texto in ["i", "individual"]:
+        return "individual"
+
+    if texto in ["g", "grupo"]:
+        return "grupo"
+
+    if texto in ["subtotal", "total"]:
+        return "subtotal"
+
+    return None
+
+
+def _normalizar_nombre_plataforma(valor):
+    texto = _normalizar_texto(valor)
+
+    if not texto or texto == "nan":
+        return None
+
+    if "cuota" in texto:
+        return None
+
+    return str(valor).strip()
 
 
 def leer_listado_compras_bitransfer(file):
@@ -118,3 +193,151 @@ def leer_listado_compras_bitransfer(file):
     resultado = resultado[resultado["cn"].str.len() > 0]
 
     return resultado.reset_index(drop=True)
+
+
+def leer_cuadro_resumen_consumos(file):
+    df = pd.read_excel(file, header=None)
+
+    bloque = None
+    encabezados = {}
+    bitransfer = []
+    plataformas = []
+    ultima_plataforma = None
+
+    for _, fila in df.iterrows():
+        fila_texto = " ".join(
+            _normalizar_texto(valor)
+            for valor in fila.values
+            if not pd.isna(valor)
+        )
+        primera_celda = _normalizar_texto(fila.iloc[0]) if len(fila) else ""
+        nuevos_encabezados = _mapear_encabezados(fila)
+
+        if nuevos_encabezados and "venta_bruta" in nuevos_encabezados:
+            encabezados = nuevos_encabezados
+
+        if primera_celda in ["bitransfer", "bittransfer", "bitrasnfer"]:
+            bloque = "bitransfer"
+            continue
+
+        if primera_celda == "plataforma":
+            bloque = "plataforma"
+            continue
+
+        if "cuota" in fila_texto:
+            cuota = _extraer_numero_en_texto(fila_texto)
+            if ultima_plataforma is not None:
+                plataformas[ultima_plataforma]["cuota"] = cuota
+            continue
+
+        if not encabezados:
+            continue
+
+        if bloque == "bitransfer":
+            tipo = _normalizar_tipo_bitransfer(_valor_fila(fila, encabezados, "tipo"))
+            if not tipo:
+                continue
+
+            bitransfer.append({
+                "tipo": tipo,
+                "venta_bruta": _normalizar_numero(_valor_fila(fila, encabezados, "venta_bruta")),
+                "pva": _normalizar_numero(_valor_fila(fila, encabezados, "pva")),
+                "pvl": _normalizar_numero(_valor_fila(fila, encabezados, "pvl")),
+                "descuento_pct": _normalizar_numero(_valor_fila(fila, encabezados, "descuento_pct")),
+                "descuento_eur": _normalizar_numero(_valor_fila(fila, encabezados, "descuento_eur")),
+                "cargo_pct": _normalizar_numero(_valor_fila(fila, encabezados, "cargo_pct")),
+                "cargo_eur": _normalizar_numero(_valor_fila(fila, encabezados, "cargo_eur")),
+                "rentabilidad_pct": _normalizar_numero(_valor_fila(fila, encabezados, "rentabilidad_pct")),
+            })
+
+        elif bloque == "plataforma":
+            plataforma = _normalizar_nombre_plataforma(_valor_fila(fila, encabezados, "tipo"))
+            if not plataforma:
+                continue
+
+            plataformas.append({
+                "plataforma": plataforma,
+                "venta_bruta": _normalizar_numero(_valor_fila(fila, encabezados, "venta_bruta")),
+                "pva": _normalizar_numero(_valor_fila(fila, encabezados, "pva")),
+                "pvl": _normalizar_numero(_valor_fila(fila, encabezados, "pvl")),
+                "descuento_pct": _normalizar_numero(_valor_fila(fila, encabezados, "descuento_pct")),
+                "descuento_eur": _normalizar_numero(_valor_fila(fila, encabezados, "descuento_eur")),
+                "cargo_pct": _normalizar_numero(_valor_fila(fila, encabezados, "cargo_pct")),
+                "cargo_eur": _normalizar_numero(_valor_fila(fila, encabezados, "cargo_eur")),
+                "rentabilidad_pct": _normalizar_numero(_valor_fila(fila, encabezados, "rentabilidad_pct")),
+                "cuota": None,
+            })
+            ultima_plataforma = len(plataformas) - 1
+
+    if not bitransfer and not plataformas:
+        raise ValueError("No se ha detectado ningún bloque BitTransfer o Plataforma.")
+
+    return {
+        "bitransfer": pd.DataFrame(bitransfer),
+        "plataformas": pd.DataFrame(plataformas),
+    }
+
+
+def conciliar_bitransfer_consumos(df_compras, resumen_consumos):
+    df_compras = df_compras.copy()
+    df_resumen = resumen_consumos["bitransfer"].copy()
+
+    if df_resumen.empty:
+        raise ValueError("El cuadro resumen no contiene bloque BitTransfer.")
+
+    df_compras["venta_bruta"] = df_compras["pvl"] * df_compras["cantidad"].fillna(1)
+    df_compras["cargo_teorico"] = df_compras["venta_bruta"] * (df_compras["cargo_pct"].fillna(0) / 100)
+    df_compras["coste_teorico"] = (
+        df_compras["venta_bruta"] * (1 + df_compras["descuento_pct"].fillna(0) / 100)
+        + df_compras["cargo_teorico"]
+    )
+
+    total_compras = round(df_compras["venta_bruta"].sum(), 2)
+    total_resumen = df_resumen[df_resumen["tipo"] == "subtotal"]["venta_bruta"].dropna()
+
+    if total_resumen.empty:
+        total_resumen_valor = round(df_resumen[df_resumen["tipo"] != "subtotal"]["venta_bruta"].sum(), 2)
+    else:
+        total_resumen_valor = round(float(total_resumen.iloc[0]), 2)
+
+    cargo_resumen = df_resumen[df_resumen["tipo"] != "subtotal"]["cargo_eur"].dropna().sum()
+
+    if cargo_resumen == 0:
+        filas_cargo = df_resumen[df_resumen["tipo"] != "subtotal"].copy()
+        cargo_resumen = (
+            filas_cargo["venta_bruta"].fillna(0)
+            * (filas_cargo["cargo_pct"].fillna(0) / 100)
+        ).sum()
+
+    cargo_teorico_total = df_compras["cargo_teorico"].sum()
+    cargo_a_imputar = float(cargo_resumen) if cargo_resumen > 0 else float(cargo_teorico_total)
+
+    if cargo_teorico_total > 0:
+        df_compras["cargo_imputado"] = (
+            df_compras["cargo_teorico"] / cargo_teorico_total
+        ) * cargo_a_imputar
+    elif df_compras["venta_bruta"].sum() > 0:
+        df_compras["cargo_imputado"] = (
+            df_compras["venta_bruta"] / df_compras["venta_bruta"].sum()
+        ) * cargo_a_imputar
+    else:
+        df_compras["cargo_imputado"] = 0
+
+    df_compras["coste_real_estimado"] = (
+        df_compras["venta_bruta"] * (1 + df_compras["descuento_pct"].fillna(0) / 100)
+        + df_compras["cargo_imputado"]
+    )
+    df_compras["diferencia_neto"] = df_compras["coste_real_estimado"] - df_compras["importe_neto"]
+
+    resumen = {
+        "venta_bruta_compras": float(total_compras),
+        "venta_bruta_resumen": total_resumen_valor,
+        "diferencia_venta_bruta": float(round(total_compras - total_resumen_valor, 2)),
+        "cargo_resumen": round(float(cargo_resumen), 2),
+        "cargo_teorico_compras": round(float(cargo_teorico_total), 2),
+        "diferencia_cargo": round(float(cargo_teorico_total - cargo_resumen), 2),
+        "importe_neto_compras": round(float(df_compras["importe_neto"].sum()), 2),
+        "coste_real_estimado_compras": round(float(df_compras["coste_real_estimado"].sum()), 2),
+    }
+
+    return df_compras, resumen

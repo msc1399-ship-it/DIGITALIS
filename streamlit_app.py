@@ -6,7 +6,11 @@ from modules.ingestion import load_excel
 from modules.parser import parse_sections
 from modules.classification import normalize_columns
 from modules.analytics import analizar_factura_bidafarma, analizar_factura_transfer
-from modules.bitransfer import leer_listado_compras_bitransfer
+from modules.bitransfer import (
+    conciliar_bitransfer_consumos,
+    leer_cuadro_resumen_consumos,
+    leer_listado_compras_bitransfer,
+)
 
 # =========================
 # NORMALIZADOR GLOBAL
@@ -205,11 +209,25 @@ if df is not None:
                     key="bitransfer_compras_excel"
                 )
 
+            resumen_consumos = None
+            df_bt_compras = None
+
             if excel_consumos_bitransfer:
-                st.info(
-                    "Cuadro resumen de consumos cargado. "
-                    "Lo conectaremos en el siguiente paso para parearlo con el listado de compras."
-                )
+                try:
+                    resumen_consumos = leer_cuadro_resumen_consumos(excel_consumos_bitransfer)
+
+                    st.subheader("📊 Cuadro resumen de consumos normalizado")
+
+                    if not resumen_consumos["bitransfer"].empty:
+                        st.caption("Bloque BitTransfer")
+                        st.dataframe(resumen_consumos["bitransfer"])
+
+                    if not resumen_consumos["plataformas"].empty:
+                        st.caption("Bloque plataformas")
+                        st.dataframe(resumen_consumos["plataformas"])
+
+                except ValueError as error:
+                    st.error(f"No se pudo leer el cuadro resumen de consumos: {error}")
 
             if excel_compras_bitransfer:
                 try:
@@ -226,6 +244,75 @@ if df is not None:
 
                 except ValueError as error:
                     st.error(f"No se pudo leer el listado de compras BitTransfer: {error}")
+
+            if resumen_consumos is not None and df_bt_compras is not None:
+                try:
+                    df_bt_conciliado, resumen_conciliacion = conciliar_bitransfer_consumos(
+                        df_bt_compras,
+                        resumen_consumos
+                    )
+
+                    st.subheader("✅ Conciliación BitTransfer")
+
+                    c1, c2, c3, c4, c5, c6 = st.columns(6)
+                    c1.metric("Bruto resumen", f"{resumen_conciliacion['venta_bruta_resumen']:.2f} €")
+                    c2.metric("Bruto compras", f"{resumen_conciliacion['venta_bruta_compras']:.2f} €")
+                    c3.metric("Diferencia bruto", f"{resumen_conciliacion['diferencia_venta_bruta']:.2f} €")
+                    c4.metric("Cargo resumen", f"{resumen_conciliacion['cargo_resumen']:.2f} €")
+                    c5.metric("Cargo teórico", f"{resumen_conciliacion['cargo_teorico_compras']:.2f} €")
+                    c6.metric("Dif. cargo", f"{resumen_conciliacion['diferencia_cargo']:.2f} €")
+
+                    if abs(resumen_conciliacion["diferencia_venta_bruta"]) <= 0.05:
+                        st.success("La venta bruta del resumen cuadra con el listado de compras BitTransfer.")
+                    else:
+                        st.warning(
+                            "La venta bruta no cuadra todavía. "
+                            "Revisa si el listado de compras contiene exactamente los productos del resumen."
+                        )
+
+                    st.caption(
+                        "Detalle con coste real estimado: bruto - descuento + cargo imputado. "
+                        "Si el cargo del resumen viene bonificado, se prorratea sobre el cargo teórico."
+                    )
+                    st.dataframe(df_bt_conciliado)
+
+                    plataformas = resumen_consumos["plataformas"]
+                    if not plataformas.empty:
+                        st.subheader("🧩 Listados de productos de plataformas")
+                        st.info(
+                            "El cuadro resumen contiene plataformas o grupos adicionales. "
+                            "Sube aquí el Excel de productos de cada plataforma para poder prorratear cuotas "
+                            "y aplicar su cargo específico en el siguiente paso."
+                        )
+
+                        for indice, plataforma in plataformas.iterrows():
+                            nombre_plataforma = str(plataforma["plataforma"])
+                            cargo_pct = plataforma.get("cargo_pct")
+                            cuota = plataforma.get("cuota")
+
+                            st.markdown(
+                                f"**{nombre_plataforma}**"
+                                f" · Cargo: {cargo_pct if pd.notna(cargo_pct) else 0:.2f}%"
+                                f" · Cuota: {cuota if pd.notna(cuota) else 0:.2f} €"
+                            )
+
+                            excel_plataforma = st.file_uploader(
+                                f"Listado de productos {nombre_plataforma}",
+                                type=["xlsx"],
+                                key=f"plataforma_{indice}_excel"
+                            )
+
+                            if excel_plataforma:
+                                try:
+                                    df_plataforma = leer_listado_compras_bitransfer(excel_plataforma)
+                                    st.dataframe(df_plataforma)
+                                except ValueError as error:
+                                    st.error(
+                                        f"No se pudo leer el listado de productos de {nombre_plataforma}: {error}"
+                                    )
+
+                except ValueError as error:
+                    st.error(f"No se pudo conciliar BitTransfer: {error}")
 
     # -------------------------
     # FACTURA TRANSFER
