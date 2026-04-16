@@ -6,6 +6,7 @@ from modules.ingestion import load_excel
 from modules.parser import parse_sections
 from modules.classification import normalize_columns
 from modules.analytics import analizar_factura_bidafarma, analizar_factura_transfer
+from modules.bitransfer import leer_listado_compras_bitransfer
 
 # =========================
 # NORMALIZADOR GLOBAL
@@ -188,15 +189,43 @@ if df is not None:
 
             st.subheader("🔍 Desglose gastos gestión Bitransfer")
 
-            excel_bitransfer = st.file_uploader(
-                "Excel Bitransfer",
-                type=["xlsx"],
-                key="bitransfer_excel"
-            )
+            col_consumos, col_compras = st.columns(2)
 
-            if excel_bitransfer:
-                df_bt = pd.read_excel(excel_bitransfer)
-                st.dataframe(df_bt.head())
+            with col_consumos:
+                excel_consumos_bitransfer = st.file_uploader(
+                    "Cuadro resumen de consumos",
+                    type=["xlsx"],
+                    key="bitransfer_consumos_excel"
+                )
+
+            with col_compras:
+                excel_compras_bitransfer = st.file_uploader(
+                    "Listado de compras BitTransfer",
+                    type=["xlsx"],
+                    key="bitransfer_compras_excel"
+                )
+
+            if excel_consumos_bitransfer:
+                st.info(
+                    "Cuadro resumen de consumos cargado. "
+                    "Lo conectaremos en el siguiente paso para parearlo con el listado de compras."
+                )
+
+            if excel_compras_bitransfer:
+                try:
+                    df_bt_compras = leer_listado_compras_bitransfer(excel_compras_bitransfer)
+
+                    st.subheader("📋 Listado de compras BitTransfer normalizado")
+
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Códigos nacionales", df_bt_compras["cn"].nunique())
+                    c2.metric("Unidades", int(df_bt_compras["cantidad"].fillna(0).sum()))
+                    c3.metric("Importe neto", f"{df_bt_compras['importe_neto'].sum():.2f} €")
+
+                    st.dataframe(df_bt_compras)
+
+                except ValueError as error:
+                    st.error(f"No se pudo leer el listado de compras BitTransfer: {error}")
 
     # -------------------------
     # FACTURA TRANSFER
@@ -246,5 +275,3 @@ if df is not None:
 
 if df is None:
     st.warning("Sube archivos")
-
-
