@@ -150,7 +150,6 @@ def leer_listado_compras_bitransfer(file):
         "descripcion": _buscar_columna(df.columns, ["descripcion", "producto", "articulo"]),
         "cantidad": _buscar_columna(df.columns, ["cant.", "cantidad", "unidades"]),
         "pvl": _buscar_columna(df.columns, ["pvl", "importe", "importe bruto", "bruto"]),
-        "cantidad_total": _buscar_columna(df.columns, ["cant. total", "cantidad total"]),
         "descuento": _buscar_columna(df.columns, ["desc.", "descuento"]),
         "cargo": _buscar_columna(df.columns, ["gast.", "gasto", "cargo", "recargo"]),
         "importe_neto": _buscar_columna(df.columns, ["total", "importe neto", "neto"]),
@@ -175,11 +174,6 @@ def leer_listado_compras_bitransfer(file):
         resultado["cantidad"] = None
 
     resultado["pvl"] = df[columnas["pvl"]].apply(_normalizar_numero)
-
-    if columnas["cantidad_total"]:
-        resultado["cantidad_total"] = df[columnas["cantidad_total"]].apply(_normalizar_numero)
-    else:
-        resultado["cantidad_total"] = None
 
     if columnas["descuento"]:
         resultado["descuento_pct"] = df[columnas["descuento"]].apply(_normalizar_numero)
@@ -285,12 +279,14 @@ def conciliar_bitransfer_consumos(df_compras, resumen_consumos):
     if df_resumen.empty:
         raise ValueError("El cuadro resumen no contiene bloque BitTransfer.")
 
-    df_compras["venta_bruta"] = df_compras["pvl"] * df_compras["cantidad"].fillna(1)
-    df_compras["cargo_teorico"] = df_compras["venta_bruta"] * (df_compras["cargo_pct"].fillna(0) / 100)
-    df_compras["coste_teorico"] = (
-        df_compras["venta_bruta"] * (1 + df_compras["descuento_pct"].fillna(0) / 100)
-        + df_compras["cargo_teorico"]
+    df_compras["cantidad"] = df_compras["cantidad"].fillna(1)
+    df_compras["importe_neto_unitario"] = df_compras["importe_neto"]
+    df_compras["venta_bruta"] = df_compras["pvl"] * df_compras["cantidad"]
+    df_compras["cargo_teorico_unitario"] = df_compras["pvl"] * (df_compras["cargo_pct"].fillna(0) / 100)
+    df_compras["coste_real_unitario"] = (
+        df_compras["importe_neto_unitario"] + df_compras["cargo_teorico_unitario"]
     )
+    df_compras["coste_real_total"] = df_compras["coste_real_unitario"] * df_compras["cantidad"]
 
     total_compras = round(df_compras["venta_bruta"].sum(), 2)
     total_resumen = df_resumen[df_resumen["tipo"] == "subtotal"]["venta_bruta"].dropna()
@@ -309,25 +305,23 @@ def conciliar_bitransfer_consumos(df_compras, resumen_consumos):
             * (filas_cargo["cargo_pct"].fillna(0) / 100)
         ).sum()
 
-    cargo_teorico_total = df_compras["cargo_teorico"].sum()
-    cargo_a_imputar = float(cargo_resumen) if cargo_resumen > 0 else float(cargo_teorico_total)
+    cargo_teorico_total = (
+        df_compras["cargo_teorico_unitario"] * df_compras["cantidad"]
+    ).sum()
 
-    if cargo_teorico_total > 0:
-        df_compras["cargo_imputado"] = (
-            df_compras["cargo_teorico"] / cargo_teorico_total
-        ) * cargo_a_imputar
-    elif df_compras["venta_bruta"].sum() > 0:
-        df_compras["cargo_imputado"] = (
-            df_compras["venta_bruta"] / df_compras["venta_bruta"].sum()
-        ) * cargo_a_imputar
-    else:
-        df_compras["cargo_imputado"] = 0
-
-    df_compras["coste_real_estimado"] = (
-        df_compras["venta_bruta"] * (1 + df_compras["descuento_pct"].fillna(0) / 100)
-        + df_compras["cargo_imputado"]
-    )
-    df_compras["diferencia_neto"] = df_compras["coste_real_estimado"] - df_compras["importe_neto"]
+    columnas_visibles = [
+        "cn",
+        "descripcion",
+        "cantidad",
+        "pvl",
+        "descuento_pct",
+        "cargo_pct",
+        "importe_neto_unitario",
+        "cargo_teorico_unitario",
+        "coste_real_unitario",
+        "venta_bruta",
+    ]
+    df_conciliado = df_compras[columnas_visibles].copy()
 
     resumen = {
         "venta_bruta_compras": float(total_compras),
@@ -336,8 +330,8 @@ def conciliar_bitransfer_consumos(df_compras, resumen_consumos):
         "cargo_resumen": round(float(cargo_resumen), 2),
         "cargo_teorico_compras": round(float(cargo_teorico_total), 2),
         "diferencia_cargo": round(float(cargo_teorico_total - cargo_resumen), 2),
-        "importe_neto_compras": round(float(df_compras["importe_neto"].sum()), 2),
-        "coste_real_estimado_compras": round(float(df_compras["coste_real_estimado"].sum()), 2),
+        "importe_neto_compras": round(float((df_compras["importe_neto_unitario"] * df_compras["cantidad"]).sum()), 2),
+        "coste_real_total_compras": round(float(df_compras["coste_real_total"].sum()), 2),
     }
 
-    return df_compras, resumen
+    return df_conciliado, resumen
