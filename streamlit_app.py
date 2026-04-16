@@ -270,8 +270,8 @@ if df is not None:
                         )
 
                     st.caption(
-                        "Detalle con coste real estimado: bruto - descuento + cargo imputado. "
-                        "Si el cargo del resumen viene bonificado, se prorratea sobre el cargo teórico."
+                        "Detalle unitario: PBL, descuento, importe neto unitario, "
+                        "cargo teórico unitario y coste real unitario."
                     )
                     st.dataframe(df_bt_conciliado)
 
