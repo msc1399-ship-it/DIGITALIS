@@ -1,16 +1,15 @@
 import streamlit as st
 import pandas as pd
 import re
+import importlib
 
 from modules.ingestion import load_excel
 from modules.parser import parse_sections
 from modules.classification import normalize_columns
 from modules.analytics import analizar_factura_bidafarma, analizar_factura_transfer
-from modules.bitransfer import (
-    conciliar_bitransfer_consumos,
-    leer_cuadro_resumen_consumos,
-    leer_listado_compras_bitransfer,
-)
+import modules.bitransfer as bitransfer
+
+bitransfer = importlib.reload(bitransfer)
 
 # =========================
 # NORMALIZADOR GLOBAL
@@ -214,7 +213,7 @@ if df is not None:
 
             if excel_consumos_bitransfer:
                 try:
-                    resumen_consumos = leer_cuadro_resumen_consumos(excel_consumos_bitransfer)
+                    resumen_consumos = bitransfer.leer_cuadro_resumen_consumos(excel_consumos_bitransfer)
 
                     st.subheader("📊 Cuadro resumen de consumos normalizado")
 
@@ -231,7 +230,7 @@ if df is not None:
 
             if excel_compras_bitransfer:
                 try:
-                    df_bt_compras = leer_listado_compras_bitransfer(excel_compras_bitransfer)
+                    df_bt_compras = bitransfer.leer_listado_compras_bitransfer(excel_compras_bitransfer)
 
                     st.subheader("📋 Listado de compras BitTransfer normalizado")
 
@@ -247,7 +246,7 @@ if df is not None:
 
             if resumen_consumos is not None and df_bt_compras is not None:
                 try:
-                    df_bt_conciliado, resumen_conciliacion = conciliar_bitransfer_consumos(
+                    df_bt_conciliado, resumen_conciliacion = bitransfer.conciliar_bitransfer_consumos(
                         df_bt_compras,
                         resumen_consumos
                     )
@@ -304,7 +303,7 @@ if df is not None:
 
                             if excel_plataforma:
                                 try:
-                                    df_plataforma = leer_listado_compras_bitransfer(excel_plataforma)
+                                    df_plataforma = bitransfer.leer_listado_compras_bitransfer(excel_plataforma)
                                     st.dataframe(df_plataforma)
                                 except ValueError as error:
                                     st.error(
