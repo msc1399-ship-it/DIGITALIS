@@ -8,8 +8,10 @@ from modules.parser import parse_sections
 from modules.classification import normalize_columns
 from modules.analytics import analizar_factura_bidafarma, analizar_factura_transfer
 import modules.bitransfer as bitransfer
+import modules.servicios as servicios
 
 bitransfer = importlib.reload(bitransfer)
+servicios = importlib.reload(servicios)
 
 # =========================
 # NORMALIZADOR GLOBAL
@@ -165,6 +167,42 @@ if df is not None:
 
         st.subheader("💸 Gastos factura normal")
         st.dataframe(resultado["gastos"])
+
+        analisis_servicios = servicios.analizar_gastos_servicios(df, resultado["gastos"])
+
+        if analisis_servicios and analisis_servicios["resumen"]["servicios_factura"] > 0:
+            st.subheader("🧾 Imputación gastos por servicios")
+
+            resumen_servicios = analisis_servicios["resumen"]
+
+            s1, s2, s3, s4, s5, s6 = st.columns(6)
+            s1.metric("Avantia", "Sí" if resumen_servicios["tiene_avantia"] else "No")
+            s2.metric("Cargo Vida Natural", f"{resumen_servicios['cargo_pct_vida_natural']:.1f}%")
+            s3.metric("Servicios factura", f"{resumen_servicios['servicios_factura']:.2f} €")
+            s4.metric("Vida Natural", f"{resumen_servicios['cargo_vida_natural']:.2f} €")
+            s5.metric("Dif. servicios", f"{resumen_servicios['diferencia_servicios']:.2f} €")
+            s6.metric("Devoluciones", f"{resumen_servicios['cargo_devoluciones']:.2f} €")
+
+            if abs(resumen_servicios["diferencia_servicios"]) <= 0.05:
+                st.success("Los servicios de factura cuadran con el cargo calculado de Vida Natural.")
+            elif resumen_servicios["diferencia_servicios"] > 0:
+                st.warning(
+                    "Hay importe de servicios no cubierto por Vida Natural. "
+                    "Se imputa como posible cargo por devoluciones sobre abonos."
+                )
+            else:
+                st.warning(
+                    "El cargo calculado de Vida Natural supera el importe de servicios de factura. "
+                    "Revisa las líneas con observación B o la condición Avantia."
+                )
+
+            if not analisis_servicios["resumen_cn"].empty:
+                st.caption("Resumen de servicios imputados por código nacional")
+                st.dataframe(analisis_servicios["resumen_cn"])
+
+            if not analisis_servicios["detalle"].empty:
+                st.caption("Detalle de líneas afectadas por servicios")
+                st.dataframe(analisis_servicios["detalle"])
 
         resumen = resultado.get("resumen_costes")
 

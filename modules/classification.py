@@ -6,7 +6,8 @@ COLUMN_MAPPING = {
     "bruto": ["bruto", "importe bruto", "precio bruto"],
     "neto": ["neto", "importe neto", "precio"],
     "iva": ["iva", "tipo iva"],
-    "unidades": ["unidades", "cantidad"]
+    "unidades": ["unidades", "cantidad"],
+    "observaciones": ["observaciones", "observacion", "obs", "observ."]
 }
 
 def normalize_columns(df):
@@ -23,6 +24,5 @@ def normalize_columns(df):
     df = df.rename(columns=mapping)
 
     return df
-
 
 
