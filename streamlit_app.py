@@ -201,12 +201,8 @@ if df is not None:
                     "Revisa las líneas con observación B o la condición Avantia."
                 )
 
-            if not analisis_servicios["resumen_cn"].empty:
-                st.caption("Resumen de servicios imputados por código nacional")
-                st.dataframe(analisis_servicios["resumen_cn"])
-
             if not analisis_servicios["detalle"].empty:
-                st.caption("Detalle de líneas afectadas por servicios")
+                st.caption("Resumen detallado de líneas afectadas por servicios")
                 st.dataframe(analisis_servicios["detalle"])
 
             if not analisis_servicios["imputacion_devoluciones"].empty:
