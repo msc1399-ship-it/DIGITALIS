@@ -378,9 +378,7 @@ if df is not None:
                         g3.metric("Avantia", f"{cargo_avantia:.2f} €")
                         g4.metric("Diferencia", f"{diferencia_gestion:.2f} €")
 
-                        if abs(diferencia_gestion) <= 0.05:
-                            st.success("Los gastos de gestión cuadran con BitTransfer + Avantia.")
-                        else:
+                        if abs(diferencia_gestion) > 0.05:
                             st.warning(
                                 "Los gastos de gestión no cuadran exactamente con BitTransfer + Avantia. "
                                 "Revisa que el cuadro de consumos y el cuadro rentabilidad Avantia correspondan al mismo periodo."
