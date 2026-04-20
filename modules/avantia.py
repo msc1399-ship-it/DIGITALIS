@@ -4,6 +4,10 @@ import unicodedata
 import pandas as pd
 
 
+INCREMENTO_PVA_SOBRE_PBL = 1.076
+CARGO_AVANTIA_SIN_BONIFICACION = 2.0
+
+
 def _normalizar_texto(valor):
     texto = str(valor).strip().lower()
     texto = unicodedata.normalize("NFKD", texto)
@@ -335,6 +339,10 @@ def _bonificacion_categoria(df_cargos, categoria):
     return float(fila["bonificacion_gasto"].iloc[-1])
 
 
+def _tiene_bonificacion_categoria(df_cargos, categoria):
+    return abs(_bonificacion_categoria(df_cargos, categoria)) > 0.0001
+
+
 def _calcular_pct_efectivo(importe, base):
     if base <= 0:
         return 0.0
@@ -383,7 +391,7 @@ def analizar_avantia(df_compras, gastos_factura, df_cargos=None):
     df_avantia["categoria_avantia"] = df_avantia["iva"].apply(
         lambda iva: "especialidad" if iva == 4 else "parafarmacia" if iva in [10, 21] else "sin_categoria"
     )
-    df_avantia["base_cargo_avantia"] = df_avantia["bruto"].abs()
+    df_avantia["base_cargo_avantia"] = df_avantia["bruto"].abs() * INCREMENTO_PVA_SOBRE_PBL
 
     gasto_especialidad = _gasto_categoria(df_cargos, "especialidad")
     gasto_parafarmacia = _gasto_categoria(df_cargos, "parafarmacia")
@@ -393,13 +401,25 @@ def analizar_avantia(df_compras, gastos_factura, df_cargos=None):
     if usa_importes_excel:
         gasto_especialidad = gasto_especialidad or 0.0
         gasto_parafarmacia = gasto_parafarmacia or 0.0
+        bonificacion_por_categoria = {
+            "especialidad": _tiene_bonificacion_categoria(df_cargos, "especialidad"),
+            "parafarmacia": _tiene_bonificacion_categoria(df_cargos, "parafarmacia"),
+        }
 
         bases_por_categoria = df_avantia.groupby("categoria_avantia")["base_cargo_avantia"].sum()
         base_especialidad = float(bases_por_categoria.get("especialidad", 0.0))
         base_parafarmacia = float(bases_por_categoria.get("parafarmacia", 0.0))
 
-        pct_especialidad = _calcular_pct_efectivo(gasto_especialidad, base_especialidad)
-        pct_parafarmacia = _calcular_pct_efectivo(gasto_parafarmacia, base_parafarmacia)
+        pct_especialidad = (
+            _calcular_pct_efectivo(gasto_especialidad, base_especialidad)
+            if bonificacion_por_categoria["especialidad"]
+            else CARGO_AVANTIA_SIN_BONIFICACION
+        )
+        pct_parafarmacia = (
+            _calcular_pct_efectivo(gasto_parafarmacia, base_parafarmacia)
+            if bonificacion_por_categoria["parafarmacia"]
+            else CARGO_AVANTIA_SIN_BONIFICACION
+        )
 
         df_avantia["cargo_pct_avantia"] = df_avantia["categoria_avantia"].map({
             "especialidad": pct_especialidad,
@@ -407,6 +427,7 @@ def analizar_avantia(df_compras, gastos_factura, df_cargos=None):
         }).fillna(0.0)
 
         df_avantia["cargo_avantia"] = 0.0
+        df_avantia["metodo_cargo_avantia"] = ""
         for categoria, gasto_categoria in {
             "especialidad": gasto_especialidad,
             "parafarmacia": gasto_parafarmacia,
@@ -414,19 +435,26 @@ def analizar_avantia(df_compras, gastos_factura, df_cargos=None):
             mask = df_avantia["categoria_avantia"] == categoria
             base_categoria = float(df_avantia.loc[mask, "base_cargo_avantia"].sum())
 
-            if base_categoria > 0:
+            if not bonificacion_por_categoria[categoria]:
+                df_avantia.loc[mask, "cargo_avantia"] = (
+                    df_avantia.loc[mask, "base_cargo_avantia"] * (CARGO_AVANTIA_SIN_BONIFICACION / 100)
+                )
+                df_avantia.loc[mask, "metodo_cargo_avantia"] = "2_pct_sobre_pva_estimado"
+            elif base_categoria > 0:
                 df_avantia.loc[mask, "cargo_avantia"] = (
                     df_avantia.loc[mask, "base_cargo_avantia"] / base_categoria
                 ) * gasto_categoria
+                df_avantia.loc[mask, "metodo_cargo_avantia"] = "prorrateo_gasto_bonificado"
             else:
                 unidades_categoria = float(df_avantia.loc[mask, "unidades"].abs().sum())
                 if unidades_categoria > 0:
                     df_avantia.loc[mask, "cargo_avantia"] = (
                         df_avantia.loc[mask, "unidades"].abs() / unidades_categoria
                     ) * gasto_categoria
+                    df_avantia.loc[mask, "metodo_cargo_avantia"] = "prorrateo_gasto_bonificado"
     else:
-        pct_especialidad = _cargo_categoria(df_cargos, "especialidad")
-        pct_parafarmacia = _cargo_categoria(df_cargos, "parafarmacia")
+        pct_especialidad = CARGO_AVANTIA_SIN_BONIFICACION
+        pct_parafarmacia = CARGO_AVANTIA_SIN_BONIFICACION
 
         df_avantia["cargo_pct_avantia"] = df_avantia["categoria_avantia"].map({
             "especialidad": pct_especialidad,
@@ -435,6 +463,7 @@ def analizar_avantia(df_compras, gastos_factura, df_cargos=None):
         df_avantia["cargo_avantia"] = (
             df_avantia["base_cargo_avantia"] * (df_avantia["cargo_pct_avantia"] / 100)
         )
+        df_avantia["metodo_cargo_avantia"] = "2_pct_sobre_pva_estimado"
 
     cuota_avantia = _importe_gasto(gastos_factura, "avantia")
     unidades_totales = float(df_avantia["unidades"].abs().sum())
@@ -461,6 +490,7 @@ def analizar_avantia(df_compras, gastos_factura, df_cargos=None):
         "cargo_pct_avantia",
         "cargo_avantia",
         "base_cargo_avantia",
+        "metodo_cargo_avantia",
         "cuota_avantia_linea",
         "coste_avantia_total_linea",
         "neto_con_avantia",
