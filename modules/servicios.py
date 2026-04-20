@@ -165,7 +165,7 @@ def analizar_gastos_servicios(df_compras, gastos_factura):
 
     vida_natural = df_goteo[df_goteo["observaciones"].apply(_contiene_observacion_b)].copy()
     if not vida_natural.empty:
-        vida_natural["tipo_servicio"] = "VidaNatural/VidaPharma B"
+        vida_natural["tipo_servicio"] = "bidanatural"
         vida_natural["cargo_pct"] = pct_vida_natural
         vida_natural["base_cargo"] = vida_natural["bruto"].abs()
         vida_natural["cargo_servicio"] = vida_natural["base_cargo"] * (pct_vida_natural / 100)
