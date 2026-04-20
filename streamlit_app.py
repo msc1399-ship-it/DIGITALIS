@@ -9,9 +9,11 @@ from modules.classification import normalize_columns
 from modules.analytics import analizar_factura_bidafarma, analizar_factura_transfer
 import modules.bitransfer as bitransfer
 import modules.servicios as servicios
+import modules.avantia as avantia
 
 bitransfer = importlib.reload(bitransfer)
 servicios = importlib.reload(servicios)
+avantia = importlib.reload(avantia)
 
 # =========================
 # NORMALIZADOR GLOBAL
@@ -224,6 +226,56 @@ if df is not None:
             col2.metric("IVA (21%)", f"{resumen['iva']} €")
             col3.metric("TOTAL", f"{resumen['total']} €")
 
+        analisis_avantia = None
+        hay_avantia_detectada = avantia.hay_avantia(df, resultado["gastos"])
+
+        if hay_avantia_detectada:
+            st.subheader("🧾 Desglose Avantia")
+
+            excel_avantia = st.file_uploader(
+                "Cuadro rentabilidad Avantia",
+                type=["xlsx"],
+                key="avantia_rentabilidad_excel"
+            )
+
+            if excel_avantia:
+                try:
+                    cargos_avantia = avantia.leer_cuadro_rentabilidad_avantia(excel_avantia)
+                    analisis_avantia = avantia.analizar_avantia(df, resultado["gastos"], cargos_avantia)
+
+                    if analisis_avantia:
+                        resumen_avantia = analisis_avantia["resumen"]
+
+                        a1, a2, a3, a4, a5, a6 = st.columns(6)
+                        a1.metric("Cargo esp.", f"{resumen_avantia['pct_especialidad']:.2f}%")
+                        a2.metric("Cargo paraf.", f"{resumen_avantia['pct_parafarmacia']:.2f}%")
+                        a3.metric("Especialidad", f"{resumen_avantia['cargo_especialidad']:.2f} €")
+                        a4.metric("Parafarmacia", f"{resumen_avantia['cargo_parafarmacia']:.2f} €")
+                        a5.metric("Cuota Avantia", f"{resumen_avantia['cuota_avantia']:.2f} €")
+                        a6.metric("Coste total", f"{resumen_avantia['coste_total_avantia']:.2f} €")
+
+                        if not analisis_avantia["cargos"].empty:
+                            st.caption("Cargos detectados en cuadro rentabilidad Avantia")
+                            st.dataframe(analisis_avantia["cargos"])
+
+                        if not analisis_avantia["detalle"].empty:
+                            st.caption("Resumen detallado de artículos Avantia")
+                            st.dataframe(analisis_avantia["detalle"])
+                        else:
+                            st.info(
+                                "Se ha detectado Avantia, pero no hay líneas de albarán con Avantia "
+                                "en la descripción para imputar cargos."
+                            )
+
+                except ValueError as error:
+                    st.error(f"No se pudo leer el cuadro rentabilidad Avantia: {error}")
+            else:
+                st.info(
+                    "Se ha detectado Avantia por factura o albaranes. "
+                    "Sube el cuadro rentabilidad Avantia para calcular los cargos de especialidad/parafarmacia "
+                    "y prorratear la cuota."
+                )
+
         # BITRANSFER
         df_bida = df[df["proveedor"] == "bidafarma"]
 
@@ -307,6 +359,32 @@ if df is not None:
                     c4.metric("Cargo resumen", f"{resumen_conciliacion['cargo_resumen']:.2f} €")
                     c5.metric("Cargo teórico", f"{resumen_conciliacion['cargo_teorico_compras']:.2f} €")
                     c6.metric("Dif. cargo", f"{resumen_conciliacion['diferencia_cargo']:.2f} €")
+
+                    if analisis_avantia:
+                        gestion_factura = float(resultado["gastos"].loc[
+                            resultado["gastos"]["tipo"] == "gestion",
+                            "importe"
+                        ].sum())
+                        cargo_bitransfer = resumen_conciliacion["cargo_resumen"]
+                        cargo_avantia = analisis_avantia["resumen"]["cargo_total"]
+                        gestion_calculada = cargo_bitransfer + cargo_avantia
+                        diferencia_gestion = gestion_factura - gestion_calculada
+
+                        st.subheader("🧮 Conciliación gastos de gestión")
+
+                        g1, g2, g3, g4 = st.columns(4)
+                        g1.metric("Gestión factura", f"{gestion_factura:.2f} €")
+                        g2.metric("BitTransfer", f"{cargo_bitransfer:.2f} €")
+                        g3.metric("Avantia", f"{cargo_avantia:.2f} €")
+                        g4.metric("Diferencia", f"{diferencia_gestion:.2f} €")
+
+                        if abs(diferencia_gestion) <= 0.05:
+                            st.success("Los gastos de gestión cuadran con BitTransfer + Avantia.")
+                        else:
+                            st.warning(
+                                "Los gastos de gestión no cuadran exactamente con BitTransfer + Avantia. "
+                                "Revisa que el cuadro de consumos y el cuadro rentabilidad Avantia correspondan al mismo periodo."
+                            )
 
                     if abs(resumen_conciliacion["diferencia_venta_bruta"]) <= 0.05:
                         st.success("La venta bruta del resumen cuadra con el listado de compras BitTransfer.")
