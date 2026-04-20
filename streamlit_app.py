@@ -247,10 +247,10 @@ if df is not None:
                         resumen_avantia = analisis_avantia["resumen"]
 
                         a1, a2, a3, a4, a5, a6 = st.columns(6)
-                        a1.metric("Cargo esp.", f"{resumen_avantia['pct_especialidad']:.2f}%")
-                        a2.metric("Cargo paraf.", f"{resumen_avantia['pct_parafarmacia']:.2f}%")
-                        a3.metric("Especialidad", f"{resumen_avantia['cargo_especialidad']:.2f} €")
-                        a4.metric("Parafarmacia", f"{resumen_avantia['cargo_parafarmacia']:.2f} €")
+                        a1.metric("Gasto esp.", f"{resumen_avantia['cargo_especialidad']:.2f} €")
+                        a2.metric("Gasto paraf.", f"{resumen_avantia['cargo_parafarmacia']:.2f} €")
+                        a3.metric("Bonif. esp.", f"{resumen_avantia['bonificacion_especialidad']:.2f} €")
+                        a4.metric("Bonif. paraf.", f"{resumen_avantia['bonificacion_parafarmacia']:.2f} €")
                         a5.metric("Cuota Avantia", f"{resumen_avantia['cuota_avantia']:.2f} €")
                         a6.metric("Coste total", f"{resumen_avantia['coste_total_avantia']:.2f} €")
 
@@ -272,7 +272,7 @@ if df is not None:
             else:
                 st.info(
                     "Se ha detectado Avantia por factura o albaranes. "
-                    "Sube el cuadro rentabilidad Avantia para calcular los cargos de especialidad/parafarmacia "
+                    "Sube el cuadro rentabilidad Avantia para calcular los gastos de especialidad/parafarmacia "
                     "y prorratear la cuota."
                 )
 
