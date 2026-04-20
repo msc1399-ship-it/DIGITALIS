@@ -177,17 +177,17 @@ if df is not None:
 
             s1, s2, s3, s4, s5, s6 = st.columns(6)
             s1.metric("Avantia", "Sí" if resumen_servicios["tiene_avantia"] else "No")
-            s2.metric("Cargo VidaNatural/VidaPharma B", f"{resumen_servicios['cargo_pct_vida_natural']:.1f}%")
+            s2.metric("Cargo bidanatural", f"{resumen_servicios['cargo_pct_vida_natural']:.1f}%")
             s3.metric("Servicios factura", f"{resumen_servicios['servicios_factura']:.2f} €")
-            s4.metric("VidaNatural/VidaPharma B", f"{resumen_servicios['cargo_vida_natural']:.2f} €")
+            s4.metric("bidanatural", f"{resumen_servicios['cargo_vida_natural']:.2f} €")
             s5.metric("Dif. servicios", f"{resumen_servicios['diferencia_servicios']:.2f} €")
             s6.metric("Devoluciones", f"{resumen_servicios['cargo_devoluciones']:.2f} €")
 
             if abs(resumen_servicios["diferencia_servicios"]) <= 0.05:
-                st.success("Los servicios de factura cuadran con el cargo calculado de VidaNatural/VidaPharma B.")
+                st.success("Los servicios de factura cuadran con el cargo calculado de bidanatural.")
             elif resumen_servicios["diferencia_servicios"] > 0:
                 st.warning(
-                    "Hay importe de servicios no cubierto por VidaNatural/VidaPharma B. "
+                    "Hay importe de servicios no cubierto por bidanatural. "
                     "Se imputa como posible cargo por devoluciones sobre abonos."
                 )
                 if resumen_servicios.get("devoluciones_cuadran"):
@@ -197,7 +197,7 @@ if df is not None:
                     )
             else:
                 st.warning(
-                    "El cargo calculado de VidaNatural/VidaPharma B supera el importe de servicios de factura. "
+                    "El cargo calculado de bidanatural supera el importe de servicios de factura. "
                     "Revisa las líneas con observación B o la condición Avantia."
                 )
 
