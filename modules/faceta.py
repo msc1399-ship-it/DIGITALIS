@@ -156,6 +156,50 @@ def _extraer_nombre_liquidacion(concepto):
     return texto
 
 
+def es_linea_faceta(valor_tipo=None, valor_descripcion=None):
+    tipo_texto = _normalizar_texto(valor_tipo)
+    descripcion_texto = _normalizar_texto(valor_descripcion)
+
+    if tipo_texto in {"74", "tp74"}:
+        return True
+
+    if "margen tramo fijo" in descripcion_texto or "liquidacion" in descripcion_texto:
+        return True
+
+    return False
+
+
+def extraer_faceta_desde_lineas(df_compras):
+    if df_compras is None or df_compras.empty:
+        return pd.DataFrame()
+
+    df = df_compras.copy()
+    tipos = df["tipo"] if "tipo" in df.columns else pd.Series([""] * len(df), index=df.index)
+    descripciones = df["descripcion"] if "descripcion" in df.columns else pd.Series([""] * len(df), index=df.index)
+
+    mask_faceta = pd.Series(
+        [es_linea_faceta(tipo, descripcion) for tipo, descripcion in zip(tipos, descripciones)],
+        index=df.index,
+    )
+
+    df_faceta = df[mask_faceta].copy()
+    if df_faceta.empty:
+        return pd.DataFrame()
+
+    df_faceta["concepto"] = df_faceta.get("descripcion", "").astype(str)
+    df_faceta["concepto_normalizado"] = df_faceta["concepto"].apply(_normalizar_texto)
+    df_faceta["importe"] = _serie_numerica(df_faceta, "neto")
+    df_faceta["tp"] = _serie_numerica(df_faceta, "tipo")
+    if "fecha_albaran" in df_faceta.columns:
+        df_faceta["fecha"] = df_faceta["fecha_albaran"]
+    if "albaran" in df_faceta.columns:
+        df_faceta["albaran"] = df_faceta["albaran"]
+    df_faceta["tarifa"] = "faceta_v"
+
+    columnas = [col for col in ["concepto", "concepto_normalizado", "importe", "tp", "fecha", "albaran", "tarifa"] if col in df_faceta.columns]
+    return df_faceta[columnas].reset_index(drop=True)
+
+
 def analizar_faceta_v(df_compras, df_faceta):
     if df_compras is None or df_compras.empty or df_faceta is None or df_faceta.empty:
         return None
