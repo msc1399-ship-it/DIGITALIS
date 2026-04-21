@@ -79,7 +79,7 @@ def _mostrar_vistas_albaranes(df):
         return
 
     for tipo in ["goteo", "transfer"]:
-        df_tipo = df[df["tipo_compra"] == tipo]
+        df_tipo = df[df["tipo_compra"] == tipo].copy()
 
         if df_tipo.empty:
             continue
@@ -89,12 +89,15 @@ def _mostrar_vistas_albaranes(df):
 
         st.dataframe(df_tipo)
 
-        df_tipo = df_tipo.copy()
+        df_tipo["bruto"] = pd.to_numeric(df_tipo["bruto"], errors="coerce").fillna(0.0)
+        df_tipo["neto"] = pd.to_numeric(df_tipo["neto"], errors="coerce").fillna(0.0)
+        df_tipo["unidades"] = pd.to_numeric(df_tipo["unidades"], errors="coerce").fillna(0.0)
         df_tipo["es_abono"] = df_tipo["neto"] < 0
         abonos = df_tipo[df_tipo["es_abono"]]
+        compras = df_tipo[~df_tipo["es_abono"]]
 
-        total_bruto = df_tipo["bruto"].sum()
-        total_neto = df_tipo["neto"].sum()
+        total_bruto = compras["bruto"].sum()
+        total_neto = compras["neto"].sum()
         total_abonos = abonos["neto"].sum()
 
         descuento = (total_bruto - total_neto) / total_bruto * 100 if total_bruto else 0
@@ -107,6 +110,142 @@ def _mostrar_vistas_albaranes(df):
         c4.metric("Neto", f"{total_neto:.1f} €")
         c5.metric("Desc %", round(descuento, 2))
         c6.metric("Abonos", f"{abs(total_abonos):.1f} €")
+
+
+def _serie_numerica(df, columna):
+    if df is None or columna not in df.columns:
+        return pd.Series([0.0] * len(df), index=df.index if df is not None else None)
+    return pd.to_numeric(df[columna], errors="coerce").fillna(0.0)
+
+
+def _descuento_pct(bruto_total, coste_total):
+    if bruto_total <= 0:
+        return 0.0
+    return round((1 - (coste_total / bruto_total)) * 100, 2)
+
+
+def _resumen_bidafarma(df, analisis_faceta=None, resumen_bitransfer=None, analisis_avantia=None):
+    if df is None or df.empty:
+        return None
+
+    df_resumen = df.copy()
+    df_resumen["bruto"] = _serie_numerica(df_resumen, "bruto")
+    df_resumen["neto"] = _serie_numerica(df_resumen, "neto")
+    df_resumen["unidades"] = _serie_numerica(df_resumen, "unidades")
+
+    compras = df_resumen[df_resumen["neto"] >= 0].copy()
+    if compras.empty:
+        return None
+
+    descripcion_norm = compras.get("descripcion", "").astype(str).str.lower()
+
+    mask_bitransfer = compras["seccion_albaran"].eq("bitransfer")
+    mask_club = compras["seccion_albaran"].eq("club")
+    mask_avantia = compras["seccion_albaran"].eq("avantia") | descripcion_norm.str.contains("avantia", na=False)
+    mask_goteo_puro = (
+        compras["tipo_compra"].eq("goteo")
+        & compras["seccion_albaran"].isin(["especialidad", "parafarmacia"])
+        & ~mask_bitransfer
+        & ~mask_club
+        & ~mask_avantia
+    )
+    mask_transfer = compras["tipo_compra"].eq("transfer")
+
+    resumen_bloques = []
+
+    def agregar_bloque(nombre, mask, coste_extra=0.0):
+        bloque = compras[mask].copy()
+        if bloque.empty:
+            return None
+
+        bruto = float(bloque["bruto"].sum())
+        neto = float(bloque["neto"].sum())
+        coste_real = neto + coste_extra
+        descuento = _descuento_pct(bruto, coste_real)
+        resumen_bloques.append({
+            "bloque": nombre,
+            "bruto_compra": round(bruto, 2),
+            "neto_inicial": round(neto, 2),
+            "coste_ajustado": round(coste_real, 2),
+            "descuento_medio_pct": descuento,
+        })
+        return {"bruto": bruto, "neto": neto, "coste": coste_real, "descuento": descuento}
+
+    bloque_goteo_puro = agregar_bloque(
+        "Goteo puro",
+        mask_goteo_puro,
+        coste_extra=0.0 if not analisis_faceta else analisis_faceta["resumen"]["margen_tramo_fijo_total"],
+    )
+    bloque_especialidad = agregar_bloque(
+        "Especialidad normal",
+        mask_goteo_puro & compras["seccion_albaran"].eq("especialidad"),
+        coste_extra=0.0 if not analisis_faceta else float(
+            analisis_faceta["detalle_tramo_fijo"]
+            .loc[analisis_faceta["detalle_tramo_fijo"]["seccion_albaran"] == "especialidad", "cargo_faceta_tramo_fijo"]
+            .sum()
+        ),
+    )
+    bloque_parafarmacia = agregar_bloque(
+        "Parafarmacia normal",
+        mask_goteo_puro & compras["seccion_albaran"].eq("parafarmacia"),
+        coste_extra=0.0 if not analisis_faceta else float(
+            analisis_faceta["detalle_tramo_fijo"]
+            .loc[analisis_faceta["detalle_tramo_fijo"]["seccion_albaran"] == "parafarmacia", "cargo_faceta_tramo_fijo"]
+            .sum()
+        ),
+    )
+    bloque_bitransfer = agregar_bloque(
+        "Bitransfer",
+        mask_bitransfer,
+        coste_extra=0.0 if not resumen_bitransfer else (
+            resumen_bitransfer["coste_real_total_compras"] - resumen_bitransfer["importe_neto_compras"]
+        ),
+    )
+    bloque_transfer = agregar_bloque("Transfer", mask_transfer)
+    bloque_club = agregar_bloque(
+        "Clubes",
+        mask_club,
+        coste_extra=0.0 if not analisis_faceta or analisis_faceta["detalle_liquidaciones"].empty else float(
+            analisis_faceta["detalle_liquidaciones"]["liquidacion_faceta_linea"].sum()
+        ),
+    )
+    bloque_avantia = agregar_bloque(
+        "Avantia",
+        mask_avantia,
+        coste_extra=0.0 if not analisis_avantia else float(analisis_avantia["resumen"]["coste_total_avantia"] - analisis_avantia["resumen"]["cuota_avantia"] - compras[mask_avantia]["neto"].sum()),
+    )
+
+    total_bidafarma_bruto = float(compras["bruto"].sum())
+
+    resumen_textual = []
+    if bloque_goteo_puro:
+        descuento_inicial_goteo = _descuento_pct(bloque_goteo_puro["bruto"], bloque_goteo_puro["neto"])
+        if analisis_faceta and analisis_faceta["resumen"]["margen_tramo_fijo_total"] > 0:
+            resumen_textual.append(
+                f"Hay una franquicia de {analisis_faceta['resumen']['margen_tramo_fijo_total']:.2f} € "
+                f"que reduce el descuento medio del goteo puro desde {descuento_inicial_goteo:.2f}% "
+                f"hasta {bloque_goteo_puro['descuento']:.2f}%."
+            )
+
+    if analisis_faceta and not analisis_faceta["resumen_liquidaciones"].empty:
+        for _, fila in analisis_faceta["resumen_liquidaciones"].iterrows():
+            resumen_textual.append(
+                f"Se ha detectado {fila['concepto']} por {fila['importe_liquidacion']:.2f} €, "
+                f"equivalente a un {fila['pct_liquidacion']:.2f}% sobre una base de {fila['base_liquidacion']:.2f} €."
+            )
+
+    return {
+        "tabla": pd.DataFrame(resumen_bloques),
+        "resumen_textual": resumen_textual,
+        "metricas": {
+            "total_bidafarma_bruto": round(total_bidafarma_bruto, 2),
+            "goteo_puro_descuento_real": None if not bloque_goteo_puro else bloque_goteo_puro["descuento"],
+            "bitransfer_descuento_real": None if not bloque_bitransfer else bloque_bitransfer["descuento"],
+            "transfer_descuento_real": None if not bloque_transfer else bloque_transfer["descuento"],
+            "club_descuento_real": None if not bloque_club else bloque_club["descuento"],
+            "avantia_descuento_real": None if not bloque_avantia else bloque_avantia["descuento"],
+        },
+    }
 
 
 def _render_subida_albaranes_base(nombre_proveedor, proveedor_id):
@@ -237,6 +376,8 @@ def render_vida_pharma():
     df = None
     proveedores_detectados = []
     faceta_frames = []
+    analisis_avantia = None
+    resumen_conciliacion_bitransfer = None
 
     # =========================
     # 1. ALBARANES
@@ -487,7 +628,6 @@ def render_vida_pharma():
                 col2.metric("IVA (21%)", f"{resumen['iva']} €")
                 col3.metric("TOTAL", f"{resumen['total']} €")
 
-            analisis_avantia = None
             hay_avantia_detectada = avantia.hay_avantia(df, resultado["gastos"])
 
             if hay_avantia_detectada:
@@ -610,6 +750,7 @@ def render_vida_pharma():
                             df_bt_compras,
                             resumen_consumos
                         )
+                        resumen_conciliacion_bitransfer = resumen_conciliacion
 
                         st.subheader("✅ Conciliación BitTransfer")
 
@@ -746,6 +887,41 @@ def render_vida_pharma():
 
     if df is None:
         st.warning("Sube archivos")
+        return
+
+    st.header("📌 Resumen Bidafarma")
+    analisis_faceta_final = faceta.analizar_faceta_v(df, df_faceta_bidafarma) if not df_faceta_bidafarma.empty else None
+    resumen_final = _resumen_bidafarma(
+        df,
+        analisis_faceta=analisis_faceta_final,
+        resumen_bitransfer=resumen_conciliacion_bitransfer,
+        analisis_avantia=analisis_avantia,
+    )
+
+    if resumen_final:
+        metricas = resumen_final["metricas"]
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Compra total Bidafarma", f"{metricas['total_bidafarma_bruto']:.2f} €")
+        r2.metric(
+            "Desc. real goteo puro",
+            "-" if metricas["goteo_puro_descuento_real"] is None else f"{metricas['goteo_puro_descuento_real']:.2f}%",
+        )
+        r3.metric(
+            "Desc. real Bitransfer",
+            "-" if metricas["bitransfer_descuento_real"] is None else f"{metricas['bitransfer_descuento_real']:.2f}%",
+        )
+        r4.metric(
+            "Desc. real Transfer",
+            "-" if metricas["transfer_descuento_real"] is None else f"{metricas['transfer_descuento_real']:.2f}%",
+        )
+
+        if resumen_final["resumen_textual"]:
+            for texto in resumen_final["resumen_textual"]:
+                st.info(texto)
+
+        if not resumen_final["tabla"].empty:
+            st.caption("Resumen de compras y descuentos reales por bloque")
+            st.dataframe(resumen_final["tabla"])
 
 
 st.set_page_config(layout="wide")
