@@ -89,6 +89,13 @@ def _mostrar_vistas_albaranes(df):
 
         st.dataframe(df_tipo)
 
+        if "tipo" in df_tipo.columns:
+            mask_faceta = df_tipo.apply(
+                lambda row: faceta.es_linea_faceta(row.get("tipo"), row.get("descripcion")),
+                axis=1,
+            )
+            df_tipo = df_tipo[~mask_faceta].copy()
+
         df_tipo["bruto"] = pd.to_numeric(df_tipo["bruto"], errors="coerce").fillna(0.0)
         df_tipo["neto"] = pd.to_numeric(df_tipo["neto"], errors="coerce").fillna(0.0)
         df_tipo["unidades"] = pd.to_numeric(df_tipo["unidades"], errors="coerce").fillna(0.0)
@@ -129,6 +136,13 @@ def _resumen_bidafarma(df, analisis_faceta=None, resumen_bitransfer=None, analis
         return None
 
     df_resumen = df.copy()
+    if "tipo" in df_resumen.columns:
+        mask_faceta = df_resumen.apply(
+            lambda row: faceta.es_linea_faceta(row.get("tipo"), row.get("descripcion")),
+            axis=1,
+        )
+        df_resumen = df_resumen[~mask_faceta].copy()
+
     df_resumen["bruto"] = _serie_numerica(df_resumen, "bruto")
     df_resumen["neto"] = _serie_numerica(df_resumen, "neto")
     df_resumen["unidades"] = _serie_numerica(df_resumen, "unidades")
@@ -222,7 +236,7 @@ def _resumen_bidafarma(df, analisis_faceta=None, resumen_bitransfer=None, analis
         descuento_inicial_goteo = _descuento_pct(bloque_goteo_puro["bruto"], bloque_goteo_puro["neto"])
         if analisis_faceta and analisis_faceta["resumen"]["margen_tramo_fijo_total"] > 0:
             resumen_textual.append(
-                f"Hay una franquicia de {analisis_faceta['resumen']['margen_tramo_fijo_total']:.2f} € "
+                f"Hay un cargo de tramo fijo de {analisis_faceta['resumen']['margen_tramo_fijo_total']:.2f} € "
                 f"que reduce el descuento medio del goteo puro desde {descuento_inicial_goteo:.2f}% "
                 f"hasta {bloque_goteo_puro['descuento']:.2f}%."
             )
@@ -452,6 +466,11 @@ def render_vida_pharma():
 
     _guardar_dataset("df_bidafarma", df)
     df_faceta_bidafarma = pd.concat(faceta_frames, ignore_index=True) if faceta_frames else pd.DataFrame()
+    if df is not None:
+        df_faceta_lineas = faceta.extraer_faceta_desde_lineas(df)
+        if not df_faceta_lineas.empty:
+            df_faceta_bidafarma = pd.concat([df_faceta_bidafarma, df_faceta_lineas], ignore_index=True)
+            df_faceta_bidafarma = df_faceta_bidafarma.drop_duplicates(subset=["concepto", "importe"], keep="last")
     _guardar_dataset("df_faceta_bidafarma", df_faceta_bidafarma)
 
     # =========================
