@@ -10,22 +10,24 @@ from modules.analytics import analizar_factura_bidafarma, analizar_factura_trans
 import modules.bitransfer as bitransfer
 import modules.servicios as servicios
 import modules.avantia as avantia
+import modules.faceta as faceta
 
 bitransfer = importlib.reload(bitransfer)
 servicios = importlib.reload(servicios)
 avantia = importlib.reload(avantia)
+faceta = importlib.reload(faceta)
 
 PROVEEDORES_BASE = {
-    "Cofares": "cofares",
-    "Allianz": "allianz",
-    "Efame": "efame",
+    "cofares": "cofares",
+    "alliance": "alliance",
+    "hefame": "hefame",
 }
 
 SECCIONES = [
-    "Vida Pharma",
-    "Cofares",
-    "Allianz",
-    "Efame",
+    "bidafarma",
+    "cofares",
+    "alliance",
+    "hefame",
     "Facturas laboratorios",
     "Ventas farmacia",
     "Resumen",
@@ -205,7 +207,7 @@ def render_resumen():
     st.header("Resumen")
 
     filas = []
-    for nombre, proveedor_id in {"Vida Pharma": "bidafarma", **PROVEEDORES_BASE}.items():
+    for nombre, proveedor_id in {"bidafarma": "bidafarma", **PROVEEDORES_BASE}.items():
         df_proveedor = st.session_state.get(f"df_{proveedor_id}")
         filas.append({
             "seccion": nombre,
@@ -234,6 +236,7 @@ def render_resumen():
 def render_vida_pharma():
     df = None
     proveedores_detectados = []
+    faceta_frames = []
 
     # =========================
     # 1. ALBARANES
@@ -264,6 +267,14 @@ def render_vida_pharma():
     # GOTE0
     if uploaded_files:
         for uploaded_file in uploaded_files:
+            df_faceta_temp = faceta.leer_albaran_faceta_v(uploaded_file)
+            if df_faceta_temp is not None:
+                faceta_frames.append(df_faceta_temp)
+                continue
+
+            if hasattr(uploaded_file, "seek"):
+                uploaded_file.seek(0)
+
             df_temp = normalize_columns(load_excel(uploaded_file))
             df_temp.columns = [c.lower().strip() for c in df_temp.columns]
 
@@ -299,6 +310,8 @@ def render_vida_pharma():
         df = pd.concat(dfs, ignore_index=True)
 
     _guardar_dataset("df_bidafarma", df)
+    df_faceta_bidafarma = pd.concat(faceta_frames, ignore_index=True) if faceta_frames else pd.DataFrame()
+    _guardar_dataset("df_faceta_bidafarma", df_faceta_bidafarma)
 
     # =========================
     # VISTAS
@@ -306,6 +319,78 @@ def render_vida_pharma():
 
     if df is not None:
         _mostrar_vistas_albaranes(df)
+
+    if not df_faceta_bidafarma.empty:
+        st.header("🧾 Tarifa faceta V")
+
+        analisis_faceta = faceta.analizar_faceta_v(df, df_faceta_bidafarma) if df is not None else None
+
+        if analisis_faceta:
+            resumen_faceta = analisis_faceta["resumen"]
+
+            f1, f2, f3, f4 = st.columns(4)
+            f1.metric("Tramo fijo", f"{resumen_faceta['margen_tramo_fijo_total']:.2f} €")
+            f2.metric("Base tramo fijo", f"{resumen_faceta['base_tramo_fijo']:.2f} €")
+            f3.metric("Liquidaciones", f"{resumen_faceta['liquidaciones_total']:.2f} €")
+            f4.metric("Líneas afectadas", resumen_faceta["lineas_tramo_fijo"] + resumen_faceta["lineas_liquidaciones"])
+
+            st.caption("Conceptos detectados en albaranes TP 74 / tarifa faceta V")
+            st.dataframe(
+                analisis_faceta["conceptos"][
+                    [col for col in ["fecha", "hora", "tp", "concepto", "importe"] if col in analisis_faceta["conceptos"].columns]
+                ]
+            )
+
+            if not analisis_faceta["detalle_tramo_fijo"].empty:
+                st.caption("Imputación margen tramo fijo sobre goteo elegible")
+                st.dataframe(
+                    analisis_faceta["detalle_tramo_fijo"][
+                        [
+                            col for col in [
+                                "cn",
+                                "descripcion",
+                                "seccion_albaran",
+                                "unidades",
+                                "bruto",
+                                "neto",
+                                "cargo_faceta_tramo_fijo",
+                                "neto_con_faceta_tramo_fijo",
+                            ]
+                            if col in analisis_faceta["detalle_tramo_fijo"].columns
+                        ]
+                    ]
+                )
+
+            if not analisis_faceta["resumen_liquidaciones"].empty:
+                st.caption("Resumen de liquidaciones detectadas")
+                st.dataframe(analisis_faceta["resumen_liquidaciones"])
+
+            if not analisis_faceta["detalle_liquidaciones"].empty:
+                st.caption("Imputación de liquidaciones por club/laboratorio")
+                st.dataframe(
+                    analisis_faceta["detalle_liquidaciones"][
+                        [
+                            col for col in [
+                                "grupo_liquidacion",
+                                "cn",
+                                "descripcion",
+                                "unidades",
+                                "bruto",
+                                "neto",
+                                "pct_liquidacion",
+                                "liquidacion_faceta_linea",
+                                "neto_con_liquidacion",
+                            ]
+                            if col in analisis_faceta["detalle_liquidaciones"].columns
+                        ]
+                    ]
+                )
+        else:
+            st.dataframe(df_faceta_bidafarma)
+            st.info(
+                "Se ha detectado la tarifa faceta V, pero todavía no hay líneas de compra goteo "
+                "sobre las que imputar tramo fijo o liquidaciones."
+            )
 
     # =========================
     # 2. FACTURAS
@@ -675,7 +760,7 @@ seccion_activa = st.radio(
 
 st.divider()
 
-if seccion_activa == "Vida Pharma":
+if seccion_activa == "bidafarma":
     render_vida_pharma()
 elif seccion_activa in PROVEEDORES_BASE:
     render_proveedor_base(seccion_activa, PROVEEDORES_BASE[seccion_activa])
