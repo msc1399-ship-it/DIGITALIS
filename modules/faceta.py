@@ -277,3 +277,9 @@ def analizar_faceta_v(df_compras, df_faceta):
             "lineas_liquidaciones": 0 if detalle_liquidaciones_df.empty else len(detalle_liquidaciones_df),
         },
     }
+
+
+def pct_descuento_medio(bruto_total, coste_total):
+    if bruto_total <= 0:
+        return 0.0
+    return round((1 - (coste_total / bruto_total)) * 100, 2)
