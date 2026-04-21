@@ -44,6 +44,9 @@ def parse_sections(df):
         if "bitransfer" in descripcion:
             secciones.append("bitransfer")
 
+        elif "avantia" in descripcion:
+            secciones.append("avantia")
+
         elif "club" in descripcion:
             secciones.append("club")
 
