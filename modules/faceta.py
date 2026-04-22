@@ -235,11 +235,13 @@ def analizar_faceta_v(df_compras, df_faceta):
         4,
     )
 
+    base_aplicacion_tramo_fijo = float(tramo_fijo["bruto"].abs().sum()) if not tramo_fijo.empty else 0.0
+    base_tramo_fijo = margen_tramo_fijo_total * 0.076
+
     if not tramo_fijo.empty:
-        base_tramo_fijo = tramo_fijo["bruto"].abs().sum()
-        if base_tramo_fijo > 0:
+        if base_aplicacion_tramo_fijo > 0:
             tramo_fijo["cargo_faceta_tramo_fijo"] = (
-                tramo_fijo["bruto"].abs() / base_tramo_fijo
+                tramo_fijo["bruto"].abs() / base_aplicacion_tramo_fijo
             ) * margen_tramo_fijo_total
         else:
             tramo_fijo["cargo_faceta_tramo_fijo"] = 0.0
@@ -315,7 +317,8 @@ def analizar_faceta_v(df_compras, df_faceta):
         "resumen_liquidaciones": pd.DataFrame(liquidaciones_resumen),
         "resumen": {
             "margen_tramo_fijo_total": round(margen_tramo_fijo_total, 2),
-            "base_tramo_fijo": round(float(tramo_fijo["bruto"].abs().sum()), 2) if not tramo_fijo.empty else 0.0,
+            "base_tramo_fijo": round(base_tramo_fijo, 2),
+            "base_aplicacion": round(base_aplicacion_tramo_fijo, 2),
             "lineas_tramo_fijo": 0 if tramo_fijo.empty else len(tramo_fijo),
             "liquidaciones_total": round(float(liquidaciones["importe"].sum()), 2) if not liquidaciones.empty else 0.0,
             "lineas_liquidaciones": 0 if detalle_liquidaciones_df.empty else len(detalle_liquidaciones_df),
