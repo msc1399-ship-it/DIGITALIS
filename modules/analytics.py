@@ -38,6 +38,7 @@ def analizar_factura_bidafarma(file):
 
     albaranes = []
     gastos = []
+    ajustes_comerciales = []
 
     col_albaran = next((c for c in df.columns if "albaran" in c), None)
 
@@ -54,7 +55,7 @@ def analizar_factura_bidafarma(file):
         if len(texto) < 5:
             continue
 
-        if any(x in texto for x in ["servicio", "gestion", "gestión", "avantia"]):
+        if any(x in texto for x in ["servicio", "gestion", "gestión", "avantia", "ajuste comercial"]):
             leyendo_albaranes = False
 
         if leyendo_albaranes and col_albaran:
@@ -113,6 +114,13 @@ def analizar_factura_bidafarma(file):
                 "importe": round(importe, 2)
             })
 
+        elif "ajuste comercial" in texto:
+            ajustes_comerciales.append({
+                "tipo": "ajuste_comercial",
+                "concepto": texto_limpio,
+                "importe": round(importe, 2)
+            })
+
     total_gastos = sum([g["importe"] for g in gastos])
     iva = total_gastos * 0.21
     total_final = total_gastos + iva
@@ -120,6 +128,7 @@ def analizar_factura_bidafarma(file):
     return {
         "albaranes": list(set(albaranes)),
         "gastos": pd.DataFrame(gastos),
+        "ajustes_comerciales": pd.DataFrame(ajustes_comerciales),
         "resumen_costes": {
             "base": round(total_gastos, 2),
             "iva": round(iva, 2),
@@ -231,4 +240,3 @@ def analizar_factura_transfer(file):
             "total": round(total_final, 2)
         }
     }
-
