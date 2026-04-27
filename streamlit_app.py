@@ -481,20 +481,21 @@ def render_vida_pharma():
         _mostrar_vistas_albaranes(df)
 
     if not df_faceta_bidafarma.empty:
-        st.header("🧾 Tarifa faceta V")
+        st.header("🧾 Tarifa ZV")
 
         analisis_faceta = faceta.analizar_faceta_v(df, df_faceta_bidafarma) if df is not None else None
 
         if analisis_faceta:
             resumen_faceta = analisis_faceta["resumen"]
 
-            f1, f2, f3, f4 = st.columns(4)
+            f1, f2, f3, f4, f5 = st.columns(5)
             f1.metric("Tramo fijo", f"{resumen_faceta['margen_tramo_fijo_total']:.2f} €")
             f2.metric("Base tramo fijo", f"{resumen_faceta['base_tramo_fijo']:.2f} €")
-            f3.metric("Liquidaciones", f"{resumen_faceta['liquidaciones_total']:.2f} €")
-            f4.metric("Líneas afectadas", resumen_faceta["lineas_tramo_fijo"] + resumen_faceta["lineas_liquidaciones"])
+            f3.metric("Base de aplicación", f"{resumen_faceta['base_aplicacion']:.2f} €")
+            f4.metric("Liquidaciones", f"{resumen_faceta['liquidaciones_total']:.2f} €")
+            f5.metric("Líneas afectadas", resumen_faceta["lineas_tramo_fijo"] + resumen_faceta["lineas_liquidaciones"])
 
-            st.caption("Conceptos detectados en albaranes TP 74 / tarifa faceta V")
+            st.caption("Conceptos detectados en albaranes TP 74 / tarifa ZV")
             st.dataframe(
                 analisis_faceta["conceptos"][
                     [col for col in ["fecha", "hora", "tp", "concepto", "importe"] if col in analisis_faceta["conceptos"].columns]
