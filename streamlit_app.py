@@ -131,7 +131,64 @@ def _descuento_pct(bruto_total, coste_total):
     return round((1 - (coste_total / bruto_total)) * 100, 2)
 
 
-def _resumen_bidafarma(df, analisis_faceta=None, resumen_bitransfer=None, analisis_avantia=None):
+def _analisis_ajuste_comercial_bidafarma(df, ajustes_comerciales, df_faceta=None):
+    if df is None or df.empty or ajustes_comerciales is None or ajustes_comerciales.empty:
+        return None
+
+    if faceta.hay_cargo_tarifa(df_faceta):
+        return None
+
+    df_base = df.copy()
+    df_base["bruto"] = _serie_numerica(df_base, "bruto")
+    df_base["neto"] = _serie_numerica(df_base, "neto")
+    df_base["iva"] = _serie_numerica(df_base, "iva")
+    descripcion_norm = df_base.get("descripcion", "").astype(str).str.lower()
+
+    mask_elegible = (
+        df_base["tipo_compra"].eq("goteo")
+        & df_base["iva"].eq(4)
+        & df_base["seccion_albaran"].eq("especialidad")
+        & (df_base["bruto"].abs() <= 96)
+        & ~df_base["neto"].lt(0)
+        & ~descripcion_norm.str.contains("club", na=False)
+        & ~descripcion_norm.str.contains("avantia", na=False)
+        & ~descripcion_norm.str.contains("bitransfer|bittransfer", na=False)
+    )
+
+    detalle = df_base[mask_elegible].copy()
+    if detalle.empty:
+        return None
+
+    base_aplicacion = float(detalle["bruto"].abs().sum())
+    if base_aplicacion <= 0:
+        return None
+
+    descuento_total = abs(float(ajustes_comerciales["importe"].sum()))
+    if descuento_total <= 0:
+        return None
+
+    descuento_pct = (descuento_total / base_aplicacion) * 100
+    detalle["descuento_ajuste_comercial"] = (
+        detalle["bruto"].abs() / base_aplicacion
+    ) * descuento_total
+    detalle["neto_con_ajuste_comercial"] = (
+        detalle["neto"] - detalle["descuento_ajuste_comercial"]
+    )
+    detalle["descuento_ajuste_comercial"] = detalle["descuento_ajuste_comercial"].round(4)
+    detalle["neto_con_ajuste_comercial"] = detalle["neto_con_ajuste_comercial"].round(4)
+
+    return {
+        "detalle": detalle,
+        "resumen": {
+            "descuento_total": round(descuento_total, 2),
+            "base_aplicacion": round(base_aplicacion, 2),
+            "descuento_pct": round(descuento_pct, 2),
+            "lineas_afectadas": len(detalle),
+        },
+    }
+
+
+def _resumen_bidafarma(df, analisis_faceta=None, resumen_bitransfer=None, analisis_avantia=None, analisis_ajuste=None):
     if df is None or df.empty:
         return None
 
@@ -163,6 +220,11 @@ def _resumen_bidafarma(df, analisis_faceta=None, resumen_bitransfer=None, analis
         & ~mask_club
         & ~mask_avantia
     )
+    mask_especialidad_normal = (
+        mask_goteo_puro
+        & compras["seccion_albaran"].eq("especialidad")
+        & compras["bruto"].abs().le(96)
+    )
     mask_transfer = compras["tipo_compra"].eq("transfer")
 
     resumen_bloques = []
@@ -188,15 +250,21 @@ def _resumen_bidafarma(df, analisis_faceta=None, resumen_bitransfer=None, analis
     bloque_goteo_puro = agregar_bloque(
         "Goteo puro",
         mask_goteo_puro,
-        coste_extra=0.0 if not analisis_faceta else analisis_faceta["resumen"]["margen_tramo_fijo_total"],
+        coste_extra=(
+            (0.0 if not analisis_faceta else analisis_faceta["resumen"]["margen_tramo_fijo_total"])
+            - (0.0 if not analisis_ajuste else analisis_ajuste["resumen"]["descuento_total"])
+        ),
     )
     bloque_especialidad = agregar_bloque(
         "Especialidad normal",
-        mask_goteo_puro & compras["seccion_albaran"].eq("especialidad"),
-        coste_extra=0.0 if not analisis_faceta else float(
-            analisis_faceta["detalle_tramo_fijo"]
-            .loc[analisis_faceta["detalle_tramo_fijo"]["seccion_albaran"] == "especialidad", "cargo_faceta_tramo_fijo"]
-            .sum()
+        mask_especialidad_normal,
+        coste_extra=(
+            (0.0 if not analisis_faceta else float(
+                analisis_faceta["detalle_tramo_fijo"]
+                .loc[analisis_faceta["detalle_tramo_fijo"]["seccion_albaran"] == "especialidad", "cargo_faceta_tramo_fijo"]
+                .sum()
+            ))
+            - (0.0 if not analisis_ajuste else analisis_ajuste["resumen"]["descuento_total"])
         ),
     )
     bloque_parafarmacia = agregar_bloque(
@@ -239,6 +307,12 @@ def _resumen_bidafarma(df, analisis_faceta=None, resumen_bitransfer=None, analis
                 f"Hay un cargo de tramo fijo de {analisis_faceta['resumen']['margen_tramo_fijo_total']:.2f} € "
                 f"que reduce el descuento medio del goteo puro desde {descuento_inicial_goteo:.2f}% "
                 f"hasta {bloque_goteo_puro['descuento']:.2f}%."
+            )
+        if analisis_ajuste:
+            resumen_textual.append(
+                f"Se ha aplicado un ajuste comercial de {analisis_ajuste['resumen']['descuento_total']:.2f} € "
+                f"sobre una base elegible de {analisis_ajuste['resumen']['base_aplicacion']:.2f} €, "
+                f"equivalente a un {analisis_ajuste['resumen']['descuento_pct']:.2f}%."
             )
 
     if analisis_faceta and not analisis_faceta["resumen_liquidaciones"].empty:
@@ -390,7 +464,9 @@ def render_vida_pharma():
     df = None
     proveedores_detectados = []
     faceta_frames = []
+    analisis_faceta = None
     analisis_avantia = None
+    analisis_ajuste = None
     resumen_conciliacion_bitransfer = None
 
     # =========================
@@ -591,6 +667,36 @@ def render_vida_pharma():
 
             st.subheader("💸 Gastos factura normal")
             st.dataframe(resultado["gastos"])
+
+            ajustes_comerciales = resultado.get("ajustes_comerciales", pd.DataFrame())
+            analisis_ajuste = _analisis_ajuste_comercial_bidafarma(df, ajustes_comerciales, df_faceta_bidafarma)
+
+            if analisis_ajuste:
+                resumen_ajuste = analisis_ajuste["resumen"]
+                st.subheader("📉 Ajuste comercial en factura")
+
+                ac1, ac2, ac3, ac4 = st.columns(4)
+                ac1.metric("Descuento factura", f"{resumen_ajuste['descuento_total']:.2f} €")
+                ac2.metric("Base aplicación", f"{resumen_ajuste['base_aplicacion']:.2f} €")
+                ac3.metric("Descuento %", f"{resumen_ajuste['descuento_pct']:.2f}%")
+                ac4.metric("Líneas afectadas", resumen_ajuste["lineas_afectadas"])
+
+                st.caption("Imputación del ajuste comercial sobre especialidad IVA 4 elegible")
+                st.dataframe(
+                    analisis_ajuste["detalle"][
+                        [
+                            col for col in [
+                                "cn",
+                                "descripcion",
+                                "bruto",
+                                "neto",
+                                "descuento_ajuste_comercial",
+                                "neto_con_ajuste_comercial",
+                            ]
+                            if col in analisis_ajuste["detalle"].columns
+                        ]
+                    ]
+                )
 
             analisis_servicios = servicios.analizar_gastos_servicios(df, resultado["gastos"])
 
@@ -916,6 +1022,7 @@ def render_vida_pharma():
         analisis_faceta=analisis_faceta_final,
         resumen_bitransfer=resumen_conciliacion_bitransfer,
         analisis_avantia=analisis_avantia,
+        analisis_ajuste=analisis_ajuste,
     )
 
     if resumen_final:
