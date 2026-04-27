@@ -156,6 +156,18 @@ def _extraer_nombre_liquidacion(concepto):
     return texto
 
 
+def hay_cargo_tarifa(df_faceta):
+    if df_faceta is None or df_faceta.empty or "concepto_normalizado" not in df_faceta.columns:
+        return False
+
+    return bool(
+        df_faceta["concepto_normalizado"].astype(str).str.contains(
+            "margen tramo fijo|tramo 0|tramo0|escala|cargo tramo|cargo escala",
+            na=False,
+        ).any()
+    )
+
+
 def es_linea_faceta(valor_tipo=None, valor_descripcion=None):
     tipo_texto = _normalizar_texto(valor_tipo)
     descripcion_texto = _normalizar_texto(valor_descripcion)
