@@ -12,6 +12,8 @@ CONCEPTOS_FIN_BLOQUE = {
     "exento",
 }
 
+PATRON_CARGO_TARIFA = r"margen tramo fijo|tramo fijo|tramo 0|tramo0|diferencia de escala|ajuste escala|escala|cargo tramo|cargo escala"
+
 
 def _normalizar_texto(valor):
     texto = str(valor).strip().lower()
@@ -126,7 +128,7 @@ def leer_albaran_faceta_v(file):
 
     es_faceta_v = (
         float(tp) == 74.0 if isinstance(tp, (int, float)) else False
-    ) or "margen tramo fijo" in texto_global or "liquidacion" in texto_global or "zv" in texto_global
+    ) or "margen tramo fijo" in texto_global or "liquidacion" in texto_global
 
     if not es_faceta_v:
         return None
@@ -137,7 +139,7 @@ def leer_albaran_faceta_v(file):
     resultado["hora"] = _buscar_valor_despues_de(df_raw, "hora")
     resultado["albaran"] = _buscar_valor_despues_de(df_raw, "albaran")
     resultado["farmacia"] = _buscar_valor_despues_de(df_raw, "farmacia")
-    resultado["tarifa"] = "faceta_v"
+    resultado["tarifa"] = "tp_74"
 
     return resultado
 
@@ -162,10 +164,28 @@ def hay_cargo_tarifa(df_faceta):
 
     return bool(
         df_faceta["concepto_normalizado"].astype(str).str.contains(
-            "margen tramo fijo|tramo 0|tramo0|escala|cargo tramo|cargo escala",
+            PATRON_CARGO_TARIFA,
             na=False,
         ).any()
     )
+
+
+def detectar_tipo_albaran_74(df_faceta):
+    if df_faceta is None or df_faceta.empty or "concepto_normalizado" not in df_faceta.columns:
+        return None
+
+    conceptos = df_faceta["concepto_normalizado"].astype(str)
+
+    if conceptos.str.contains("tramo 0|tramo0|diferencia de escala|ajuste escala|cargo escala", na=False).any():
+        return 3
+
+    if conceptos.str.contains("margen tramo fijo|tramo fijo|cargo tramo", na=False).any():
+        return 2
+
+    if conceptos.str.contains("liquidacion", na=False).any():
+        return 1
+
+    return None
 
 
 def es_linea_faceta(valor_tipo=None, valor_descripcion=None):
@@ -206,7 +226,7 @@ def extraer_faceta_desde_lineas(df_compras):
         df_faceta["fecha"] = df_faceta["fecha_albaran"]
     if "albaran" in df_faceta.columns:
         df_faceta["albaran"] = df_faceta["albaran"]
-    df_faceta["tarifa"] = "faceta_v"
+    df_faceta["tarifa"] = "tp_74"
 
     columnas = [col for col in ["concepto", "concepto_normalizado", "importe", "tp", "fecha", "albaran", "tarifa"] if col in df_faceta.columns]
     return df_faceta[columnas].reset_index(drop=True)
@@ -238,14 +258,12 @@ def analizar_faceta_v(df_compras, df_faceta):
     )
 
     tramo_fijo = df_goteo[mask_tramo_fijo].copy()
-    margen_tramo_fijo_total = round(
-        float(
-            df_faceta[
-                df_faceta["concepto_normalizado"].str.contains("margen tramo fijo", na=False)
-            ]["importe"].sum()
-        ),
-        4,
-    )
+    cargos_tarifa = df_faceta[
+        df_faceta["concepto_normalizado"].str.contains(PATRON_CARGO_TARIFA, na=False)
+    ].copy()
+    tipo_albaran_74 = detectar_tipo_albaran_74(df_faceta)
+
+    margen_tramo_fijo_total = round(float(cargos_tarifa["importe"].sum()), 4)
 
     base_aplicacion_tramo_fijo = float(tramo_fijo["bruto"].abs().sum()) if not tramo_fijo.empty else 0.0
     base_tramo_fijo = margen_tramo_fijo_total * 0.076
@@ -324,10 +342,12 @@ def analizar_faceta_v(df_compras, df_faceta):
 
     return {
         "conceptos": df_faceta.copy(),
+        "cargos_tarifa": cargos_tarifa.copy(),
         "detalle_tramo_fijo": detalle_tramo_fijo,
         "detalle_liquidaciones": detalle_liquidaciones_df,
         "resumen_liquidaciones": pd.DataFrame(liquidaciones_resumen),
         "resumen": {
+            "tipo_albaran_74": tipo_albaran_74,
             "margen_tramo_fijo_total": round(margen_tramo_fijo_total, 2),
             "base_tramo_fijo": round(base_tramo_fijo, 2),
             "base_aplicacion": round(base_aplicacion_tramo_fijo, 2),
