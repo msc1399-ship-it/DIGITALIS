@@ -654,23 +654,18 @@ def render_vida_pharma():
         c2.metric("Acrónimo", condicion_detectada["acronimo"])
 
     if not df_faceta_bidafarma.empty:
-        titulo_tarifa = "Albarán TP 74"
-        if condicion_detectada:
-            solo_liquidaciones = (
-                condicion_detectada["albaran_74"] == "solo_liquidaciones"
-                and not faceta.hay_cargo_tarifa(df_faceta_bidafarma)
-            )
-            if solo_liquidaciones:
-                titulo_tarifa = f"Liquidaciones TP 74 · {condicion_detectada['nombre']} ({condicion_detectada['acronimo']})"
-            else:
-                titulo_tarifa = f"Tarifa {condicion_detectada['acronimo']} · {condicion_detectada['nombre']}"
-        st.header(f"🧾 {titulo_tarifa}")
-
         analisis_faceta = faceta.analizar_faceta_v(df, df_faceta_bidafarma) if df is not None else None
 
         if analisis_faceta:
             resumen_faceta = analisis_faceta["resumen"]
             hay_cargo_tarifa = abs(resumen_faceta["margen_tramo_fijo_total"]) > 0.0001
+            titulo_tarifa = "Albarán TP 74"
+            if condicion_detectada:
+                if hay_cargo_tarifa:
+                    titulo_tarifa = f"Tarifa {condicion_detectada['acronimo']} · {condicion_detectada['nombre']}"
+                else:
+                    titulo_tarifa = f"Liquidaciones · {condicion_detectada['nombre']} ({condicion_detectada['acronimo']})"
+            st.header(f"🧾 {titulo_tarifa}")
 
             if hay_cargo_tarifa:
                 f1, f2, f3, f4 = st.columns(4)
@@ -678,16 +673,12 @@ def render_vida_pharma():
                 f2.metric("Base tramo fijo", f"{resumen_faceta['base_tramo_fijo']:.2f} €")
                 f3.metric("Base de aplicación", f"{resumen_faceta['base_aplicacion']:.2f} €")
                 f4.metric("Liquidaciones", f"{resumen_faceta['liquidaciones_total']:.2f} €")
-            else:
-                f1 = st.columns(1)[0]
-                f1.metric("Liquidaciones", f"{resumen_faceta['liquidaciones_total']:.2f} €")
-
-            st.caption("Conceptos detectados en albaranes TP 74")
-            st.dataframe(
-                analisis_faceta["conceptos"][
-                    [col for col in ["fecha", "hora", "tp", "concepto", "importe"] if col in analisis_faceta["conceptos"].columns]
-                ]
-            )
+                st.caption("Conceptos detectados en albaranes TP 74")
+                st.dataframe(
+                    analisis_faceta["conceptos"][
+                        [col for col in ["fecha", "hora", "tp", "concepto", "importe"] if col in analisis_faceta["conceptos"].columns]
+                    ]
+                )
 
             if hay_cargo_tarifa and not analisis_faceta["detalle_tramo_fijo"].empty:
                 st.caption("Imputación margen tramo fijo sobre goteo elegible")
@@ -742,7 +733,6 @@ def render_vida_pharma():
     # =========================
 
     if df is not None:
-
         st.header("2️⃣ Facturas")
 
         # -------------------------
@@ -750,8 +740,6 @@ def render_vida_pharma():
         # -------------------------
         factura_normal = st.file_uploader("Factura NORMAL", type=["xlsx"], key="bidafarma_factura_normal")
         st.session_state["factura_normal_bidafarma"] = factura_normal.name if factura_normal else None
-
-        resultado = None
 
         if factura_normal:
 
