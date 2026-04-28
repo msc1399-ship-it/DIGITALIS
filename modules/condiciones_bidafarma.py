@@ -91,6 +91,24 @@ def _series_texto(df, columnas):
             yield df[columna].astype(str)
 
 
+def _extraer_acronimos_directos(df, columnas):
+    contador = Counter()
+
+    if df is None or df.empty:
+        return contador
+
+    for columna in columnas:
+        if columna not in df.columns:
+            continue
+
+        for valor in df[columna].astype(str):
+            acronimo = _normalizar_texto(valor)
+            if acronimo in CONDICIONES_BIDAFARMA:
+                contador[acronimo] += 1
+
+    return contador
+
+
 def extraer_acronimos(df):
     if df is None or df.empty:
         return Counter()
@@ -132,6 +150,17 @@ def extraer_acronimos(df):
 
 
 def detectar_condicion(df=None, df_faceta=None):
+    columnas_prioritarias = ["tipo", "tarifa", "condicion", "condición", "acronimo", "acrónimo"]
+    contador_directo = _extraer_acronimos_directos(df, columnas_prioritarias)
+
+    if contador_directo:
+        acronimo, apariciones = contador_directo.most_common(1)[0]
+        config = CONDICIONES_BIDAFARMA[acronimo].copy()
+        config["acronimo"] = acronimo
+        config["apariciones"] = apariciones
+        config["origen"] = "directo"
+        return config
+
     contador = extraer_acronimos(df)
     if df_faceta is not None and not df_faceta.empty:
         contador.update(extraer_acronimos(df_faceta))
@@ -141,6 +170,7 @@ def detectar_condicion(df=None, df_faceta=None):
         config = CONDICIONES_BIDAFARMA[acronimo].copy()
         config["acronimo"] = acronimo
         config["apariciones"] = apariciones
+        config["origen"] = "texto"
         return config
 
     return None
