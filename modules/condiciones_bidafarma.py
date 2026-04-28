@@ -21,7 +21,7 @@ CONDICIONES_BIDAFARMA = {
         "cargo_adicional_gestion": False,
     },
     "NN": {
-        "nombre": "Diane Zecofar",
+        "nombre": "Diane Cecofar",
         "albaran_74": "solo_liquidaciones",
         "tipo_albaran_74": None,
         "ajuste_comercial_factura": True,
