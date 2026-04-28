@@ -275,33 +275,33 @@ def _resumen_bidafarma(
     df_resumen["neto"] = _serie_numerica(df_resumen, "neto")
     df_resumen["unidades"] = _serie_numerica(df_resumen, "unidades")
 
-    compras = df_resumen[df_resumen["neto"] >= 0].copy()
-    if compras.empty:
+    lineas_resumen = df_resumen.copy()
+    if lineas_resumen.empty:
         return None
 
-    descripcion_norm = compras.get("descripcion", "").astype(str).str.lower()
+    descripcion_norm = lineas_resumen.get("descripcion", "").astype(str).str.lower()
 
-    mask_bitransfer = compras["seccion_albaran"].eq("bitransfer")
-    mask_club = compras["seccion_albaran"].eq("club")
-    mask_avantia = compras["seccion_albaran"].eq("avantia") | descripcion_norm.str.contains("avantia", na=False)
+    mask_bitransfer = lineas_resumen["seccion_albaran"].eq("bitransfer")
+    mask_club = lineas_resumen["seccion_albaran"].eq("club")
+    mask_avantia = lineas_resumen["seccion_albaran"].eq("avantia") | descripcion_norm.str.contains("avantia", na=False)
     mask_goteo_puro = (
-        compras["tipo_compra"].eq("goteo")
-        & compras["seccion_albaran"].isin(["especialidad", "parafarmacia"])
+        lineas_resumen["tipo_compra"].eq("goteo")
+        & lineas_resumen["seccion_albaran"].isin(["especialidad", "parafarmacia"])
         & ~mask_bitransfer
         & ~mask_club
         & ~mask_avantia
     )
     mask_especialidad_normal = (
         mask_goteo_puro
-        & compras["seccion_albaran"].eq("especialidad")
-        & compras["bruto"].abs().le(96)
+        & lineas_resumen["seccion_albaran"].eq("especialidad")
+        & lineas_resumen["bruto"].abs().le(96)
     )
-    mask_transfer = compras["tipo_compra"].eq("transfer")
+    mask_transfer = lineas_resumen["tipo_compra"].eq("transfer")
 
     resumen_bloques = []
 
     def agregar_bloque(nombre, mask, coste_extra=0.0):
-        bloque = compras[mask].copy()
+        bloque = lineas_resumen[mask].copy()
         if bloque.empty:
             return None
 
@@ -346,7 +346,7 @@ def _resumen_bidafarma(
     )
     bloque_parafarmacia = agregar_bloque(
         "Parafarmacia normal",
-        mask_goteo_puro & compras["seccion_albaran"].eq("parafarmacia"),
+        mask_goteo_puro & lineas_resumen["seccion_albaran"].eq("parafarmacia"),
         coste_extra=(
             (0.0 if not analisis_faceta else float(
                 analisis_faceta["detalle_tramo_fijo"]
@@ -378,10 +378,10 @@ def _resumen_bidafarma(
     bloque_avantia = agregar_bloque(
         "Avantia",
         mask_avantia,
-        coste_extra=0.0 if not analisis_avantia else float(analisis_avantia["resumen"]["coste_total_avantia"] - analisis_avantia["resumen"]["cuota_avantia"] - compras[mask_avantia]["neto"].sum()),
+        coste_extra=0.0 if not analisis_avantia else float(analisis_avantia["resumen"]["coste_total_avantia"] - analisis_avantia["resumen"]["cuota_avantia"] - lineas_resumen[mask_avantia]["neto"].sum()),
     )
 
-    total_bidafarma_bruto = float(compras["bruto"].sum())
+    total_bidafarma_bruto = float(lineas_resumen["bruto"].sum())
 
     resumen_textual = []
     if bloque_goteo_puro:
@@ -733,6 +733,7 @@ def render_vida_pharma():
     # =========================
 
     if df is not None:
+
         st.header("2️⃣ Facturas")
 
         # -------------------------
@@ -740,6 +741,8 @@ def render_vida_pharma():
         # -------------------------
         factura_normal = st.file_uploader("Factura NORMAL", type=["xlsx"], key="bidafarma_factura_normal")
         st.session_state["factura_normal_bidafarma"] = factura_normal.name if factura_normal else None
+
+        resultado = None
 
         if factura_normal:
 
