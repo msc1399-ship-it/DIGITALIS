@@ -649,17 +649,9 @@ def render_vida_pharma():
 
     if condicion_detectada:
         st.subheader("🧭 Condición detectada")
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2 = st.columns(2)
         c1.metric("Nombre", condicion_detectada["nombre"])
         c2.metric("Acrónimo", condicion_detectada["acronimo"])
-        c3.metric(
-            "Albarán 74",
-            "Sí" if condicion_detectada["albaran_74"] == "si" else condicion_detectada["albaran_74"].replace("_", " "),
-        )
-        c4.metric(
-            "Ajuste comercial",
-            "Sí" if condicion_detectada["ajuste_comercial_factura"] else "No",
-        )
 
     if not df_faceta_bidafarma.empty:
         titulo_tarifa = "Albarán TP 74"
@@ -678,17 +670,17 @@ def render_vida_pharma():
 
         if analisis_faceta:
             resumen_faceta = analisis_faceta["resumen"]
+            hay_cargo_tarifa = abs(resumen_faceta["margen_tramo_fijo_total"]) > 0.0001
 
-            f1, f2, f3, f4, f5, f6 = st.columns(6)
-            f1.metric(
-                "Tipo albarán 74",
-                condiciones_bidafarma.nombre_tipo_74(resumen_faceta.get("tipo_albaran_74")) or "-",
-            )
-            f2.metric("Cargo tarifa", f"{resumen_faceta['margen_tramo_fijo_total']:.2f} €")
-            f3.metric("Base tramo fijo", f"{resumen_faceta['base_tramo_fijo']:.2f} €")
-            f4.metric("Base de aplicación", f"{resumen_faceta['base_aplicacion']:.2f} €")
-            f5.metric("Liquidaciones", f"{resumen_faceta['liquidaciones_total']:.2f} €")
-            f6.metric("Líneas afectadas", resumen_faceta["lineas_tramo_fijo"] + resumen_faceta["lineas_liquidaciones"])
+            if hay_cargo_tarifa:
+                f1, f2, f3, f4 = st.columns(4)
+                f1.metric("Cargo tarifa", f"{resumen_faceta['margen_tramo_fijo_total']:.2f} €")
+                f2.metric("Base tramo fijo", f"{resumen_faceta['base_tramo_fijo']:.2f} €")
+                f3.metric("Base de aplicación", f"{resumen_faceta['base_aplicacion']:.2f} €")
+                f4.metric("Liquidaciones", f"{resumen_faceta['liquidaciones_total']:.2f} €")
+            else:
+                f1 = st.columns(1)[0]
+                f1.metric("Liquidaciones", f"{resumen_faceta['liquidaciones_total']:.2f} €")
 
             st.caption("Conceptos detectados en albaranes TP 74")
             st.dataframe(
@@ -697,7 +689,7 @@ def render_vida_pharma():
                 ]
             )
 
-            if not analisis_faceta["detalle_tramo_fijo"].empty:
+            if hay_cargo_tarifa and not analisis_faceta["detalle_tramo_fijo"].empty:
                 st.caption("Imputación margen tramo fijo sobre goteo elegible")
                 st.dataframe(
                     analisis_faceta["detalle_tramo_fijo"][
