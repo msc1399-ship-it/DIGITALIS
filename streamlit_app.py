@@ -180,11 +180,13 @@ def _analisis_ajuste_comercial_bidafarma(df, ajustes_comerciales, df_faceta=None
         & ~descripcion_norm.str.contains("bitransfer|bittransfer", na=False)
     )
 
-    detalle = df_base[mask_elegible].copy()
-    if detalle.empty:
+    elegibles = df_base[mask_elegible].copy()
+    if elegibles.empty:
         return None
 
-    base_aplicacion = float(detalle["bruto"].sum())
+    base_compras = float(elegibles.loc[elegibles["bruto"] > 0, "bruto"].sum())
+    base_abonos = float(elegibles.loc[elegibles["bruto"] < 0, "bruto"].sum())
+    base_aplicacion = base_compras + base_abonos
     if base_aplicacion <= 0:
         return None
 
@@ -193,9 +195,11 @@ def _analisis_ajuste_comercial_bidafarma(df, ajustes_comerciales, df_faceta=None
         return None
 
     descuento_pct = (descuento_total / base_aplicacion) * 100
-    detalle["descuento_ajuste_comercial"] = (
-        detalle["bruto"] / base_aplicacion
-    ) * descuento_total
+    detalle = elegibles[elegibles["bruto"] > 0].copy()
+    if detalle.empty:
+        return None
+
+    detalle["descuento_ajuste_comercial"] = detalle["bruto"] * (descuento_pct / 100)
     detalle["neto_con_ajuste_comercial"] = (
         detalle["neto"] - detalle["descuento_ajuste_comercial"]
     )
@@ -207,6 +211,8 @@ def _analisis_ajuste_comercial_bidafarma(df, ajustes_comerciales, df_faceta=None
         "resumen": {
             "descuento_total": round(descuento_total, 2),
             "base_aplicacion": round(base_aplicacion, 2),
+            "base_compras": round(base_compras, 2),
+            "base_abonos": round(base_abonos, 2),
             "descuento_pct": round(descuento_pct, 2),
             "lineas_afectadas": len(detalle),
         },
@@ -656,9 +662,16 @@ def render_vida_pharma():
         )
 
     if not df_faceta_bidafarma.empty:
-        titulo_tarifa = "Tarifa 74"
+        titulo_tarifa = "Albarán TP 74"
         if condicion_detectada:
-            titulo_tarifa = f"{condicion_detectada['nombre']} ({condicion_detectada['acronimo']})"
+            solo_liquidaciones = (
+                condicion_detectada["albaran_74"] == "solo_liquidaciones"
+                and not faceta.hay_cargo_tarifa(df_faceta_bidafarma)
+            )
+            if solo_liquidaciones:
+                titulo_tarifa = f"Liquidaciones TP 74 · {condicion_detectada['nombre']} ({condicion_detectada['acronimo']})"
+            else:
+                titulo_tarifa = f"Tarifa {condicion_detectada['acronimo']} · {condicion_detectada['nombre']}"
         st.header(f"🧾 {titulo_tarifa}")
 
         analisis_faceta = faceta.analizar_faceta_v(df, df_faceta_bidafarma) if df is not None else None
