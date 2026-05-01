@@ -1,0 +1,105 @@
+import re
+
+import pandas as pd
+
+
+COLUMNAS_CN = [
+    "cn",
+    "codigo nacional",
+    "codigo_nacional",
+    "cod_nacional",
+    "codigo",
+]
+
+COLUMNAS_LABORATORIO = [
+    "laboratorio",
+    "lab",
+    "nombre laboratorio",
+    "titular",
+]
+
+COLUMNAS_DESCRIPCION = [
+    "descripcion",
+    "descripción",
+    "producto",
+    "articulo",
+    "artículo",
+]
+
+
+def normalizar_cn(valor):
+    if pd.isna(valor):
+        return None
+
+    texto = re.sub(r"\D", "", str(valor))
+    return texto or None
+
+
+def _normalizar_columnas(df):
+    resultado = df.copy()
+    resultado.columns = [str(col).strip().lower() for col in resultado.columns]
+    return resultado
+
+
+def _buscar_columna(columnas, candidatas):
+    for candidata in candidatas:
+        if candidata in columnas:
+            return candidata
+    return None
+
+
+def leer_maestro_laboratorios(file):
+    nombre = str(getattr(file, "name", "")).lower()
+
+    if hasattr(file, "seek"):
+        file.seek(0)
+
+    if nombre.endswith(".csv"):
+        df = pd.read_csv(file)
+    else:
+        df = pd.read_excel(file)
+
+    df = _normalizar_columnas(df)
+
+    col_cn = _buscar_columna(df.columns, COLUMNAS_CN)
+    col_laboratorio = _buscar_columna(df.columns, COLUMNAS_LABORATORIO)
+    col_descripcion = _buscar_columna(df.columns, COLUMNAS_DESCRIPCION)
+
+    if not col_cn or not col_laboratorio:
+        raise ValueError(
+            "El fichero maestro debe incluir al menos una columna de código nacional y otra de laboratorio."
+        )
+
+    resultado = pd.DataFrame()
+    resultado["cn"] = df[col_cn].apply(normalizar_cn)
+    resultado["laboratorio_maestro"] = df[col_laboratorio].astype(str).str.strip()
+    resultado["descripcion_maestra"] = (
+        df[col_descripcion].astype(str).str.strip() if col_descripcion else None
+    )
+
+    resultado = resultado.dropna(subset=["cn", "laboratorio_maestro"])
+    resultado = resultado[resultado["cn"].str.len() > 0]
+    resultado = resultado[resultado["laboratorio_maestro"] != ""]
+    resultado = resultado.drop_duplicates(subset=["cn"], keep="first").reset_index(drop=True)
+
+    return resultado
+
+
+def enriquecer_con_laboratorio(df, maestro_df):
+    if df is None or df.empty or maestro_df is None or maestro_df.empty or "cn" not in df.columns:
+        return df
+
+    resultado = df.copy()
+    resultado["cn"] = resultado["cn"].apply(normalizar_cn)
+
+    columnas_merge = ["cn", "laboratorio_maestro"]
+    if "descripcion_maestra" in maestro_df.columns:
+        columnas_merge.append("descripcion_maestra")
+
+    resultado = resultado.merge(
+        maestro_df[columnas_merge],
+        on="cn",
+        how="left",
+    )
+
+    return resultado
