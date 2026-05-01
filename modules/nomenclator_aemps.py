@@ -54,6 +54,7 @@ def _build_laboratory_map(rows):
 
     code_candidates = [
         "codigo",
+        "codigolaboratorio",
         "cod_laboratorio",
         "laboratorio",
         "id",
