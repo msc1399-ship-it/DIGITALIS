@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 import importlib
+from pathlib import Path
 
 from modules.ingestion import load_excel
 from modules.parser import parse_sections
@@ -12,12 +13,16 @@ import modules.servicios as servicios
 import modules.avantia as avantia
 import modules.faceta as faceta
 import modules.condiciones_bidafarma as condiciones_bidafarma
+import modules.maestro_laboratorios as maestro_laboratorios
+import modules.nomenclator_aemps as nomenclator_aemps
 
 bitransfer = importlib.reload(bitransfer)
 servicios = importlib.reload(servicios)
 avantia = importlib.reload(avantia)
 faceta = importlib.reload(faceta)
 condiciones_bidafarma = importlib.reload(condiciones_bidafarma)
+maestro_laboratorios = importlib.reload(maestro_laboratorios)
+nomenclator_aemps = importlib.reload(nomenclator_aemps)
 
 PROVEEDORES_BASE = {
     "cofares": "cofares",
@@ -34,6 +39,11 @@ SECCIONES = [
     "Ventas farmacia",
     "Resumen",
 ]
+
+DATA_DIR = Path(__file__).resolve().parent / "data"
+MAESTRO_MANUAL_PATH = DATA_DIR / "maestro_cn_laboratorio_manual.csv"
+MAESTRO_MINISTERIO_PATH = DATA_DIR / "maestro_cn_laboratorio_ministerio.csv"
+MAESTRO_AEMPS_PATH = DATA_DIR / "maestro_cn_laboratorio_aemps.csv"
 
 
 # =========================
@@ -54,6 +64,215 @@ def _guardar_dataset(clave, df):
     st.session_state[clave] = df
 
 
+def _guardar_maestro_csv(df, ruta):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(ruta, index=False)
+
+
+def _cargar_maestro_csv(ruta):
+    if not ruta.exists():
+        return None
+
+    df = pd.read_csv(ruta, dtype=str)
+    if df.empty:
+        return None
+
+    return df
+
+
+def _asegurar_maestros_en_sesion():
+    if "maestro_laboratorios_df" not in st.session_state:
+        manual_df = _cargar_maestro_csv(MAESTRO_MANUAL_PATH)
+        if manual_df is not None:
+            st.session_state["maestro_laboratorios_df"] = manual_df
+            st.session_state["maestro_laboratorios_nombre"] = MAESTRO_MANUAL_PATH.name
+
+    if "maestro_ministerio_df" not in st.session_state:
+        ministerio_df = _cargar_maestro_csv(MAESTRO_MINISTERIO_PATH)
+        if ministerio_df is not None:
+            st.session_state["maestro_ministerio_df"] = ministerio_df
+            st.session_state["maestro_ministerio_nombre"] = MAESTRO_MINISTERIO_PATH.name
+
+    if "maestro_medicamentos_aemps_df" not in st.session_state:
+        aemps_df = _cargar_maestro_csv(MAESTRO_AEMPS_PATH)
+        if aemps_df is not None:
+            st.session_state["maestro_medicamentos_aemps_df"] = aemps_df
+            st.session_state["maestro_medicamentos_aemps_nombre"] = MAESTRO_AEMPS_PATH.name
+
+
+def _obtener_maestro_laboratorios():
+    _asegurar_maestros_en_sesion()
+
+    manual_df = st.session_state.get("maestro_laboratorios_df")
+    ministerio_df = st.session_state.get("maestro_ministerio_df")
+    aemps_df = st.session_state.get("maestro_medicamentos_aemps_df")
+
+    piezas = []
+    if manual_df is not None and not manual_df.empty:
+        piezas.append(manual_df.copy())
+    if ministerio_df is not None and not ministerio_df.empty:
+        piezas.append(ministerio_df.copy())
+    if aemps_df is not None and not aemps_df.empty:
+        piezas.append(aemps_df.copy())
+
+    if not piezas:
+        return None
+
+    combinado = pd.concat(piezas, ignore_index=True)
+    combinado = combinado.drop_duplicates(subset=["cn"], keep="first").reset_index(drop=True)
+    return combinado
+
+
+def _enriquecer_con_maestro(df):
+    maestro_df = _obtener_maestro_laboratorios()
+    if maestro_df is None or maestro_df.empty:
+        return df
+    return maestro_laboratorios.enriquecer_con_laboratorio(df, maestro_df)
+
+
+def _render_base_maestra_laboratorios():
+    _asegurar_maestros_en_sesion()
+
+    st.subheader("🧬 Base maestra CN / laboratorio")
+    st.caption(
+        "Usaremos como base principal el Nomenclátor de facturación del Ministerio. "
+        "La base manual servirá para completar huecos y AEMPS quedará como apoyo para medicamentos."
+    )
+
+    col_ministerio, col_manual, col_aemps = st.columns(3)
+
+    with col_ministerio:
+        ministerio_file = st.file_uploader(
+            "Nomenclátor facturación Ministerio",
+            type=["xls", "xlsx", "csv"],
+            key="maestro_ministerio_file",
+            help=(
+                "Sube aquí el nomenclátor de facturación del Ministerio. "
+                "Será la base maestra principal porque incluye código nacional, descripción, laboratorio y tipo."
+            ),
+        )
+
+        if ministerio_file:
+            try:
+                ministerio_df = maestro_laboratorios.leer_maestro_laboratorios(ministerio_file)
+                ministerio_df["fuente_maestro"] = "ministerio_facturacion"
+                if "tipo_producto" not in ministerio_df.columns:
+                    ministerio_df["tipo_producto"] = None
+                st.session_state["maestro_ministerio_df"] = ministerio_df
+                st.session_state["maestro_ministerio_nombre"] = ministerio_file.name
+                _guardar_maestro_csv(ministerio_df, MAESTRO_MINISTERIO_PATH)
+            except ValueError as error:
+                st.error(f"No se pudo leer el nomenclátor del Ministerio: {error}")
+
+    with col_manual:
+        maestro_file = st.file_uploader(
+            "Base maestra manual CN / laboratorio",
+            type=["xls", "xlsx", "csv"],
+            key="maestro_cn_laboratorio_file",
+            help=(
+                "Esta base manual nos servirá para completar fuentes no cubiertas por AEMPS, "
+                "como parafarmacia u otros códigos propios."
+            ),
+        )
+
+        if maestro_file:
+            try:
+                maestro_df = maestro_laboratorios.leer_maestro_laboratorios(maestro_file)
+                maestro_df["fuente_maestro"] = "manual"
+                st.session_state["maestro_laboratorios_df"] = maestro_df
+                st.session_state["maestro_laboratorios_nombre"] = maestro_file.name
+                _guardar_maestro_csv(maestro_df, MAESTRO_MANUAL_PATH)
+            except ValueError as error:
+                st.error(f"No se pudo leer la base maestra manual: {error}")
+
+    with col_aemps:
+        nomenclator_file = st.file_uploader(
+            "Nomenclátor AEMPS medicamentos",
+            type=["zip", "xml"],
+            key="nomenclator_aemps_file",
+            help=(
+                "Sube aquí el zip oficial del Nomenclátor AEMPS de medicamentos. "
+                "Lo convertiremos automáticamente a la base maestra CN / laboratorio para medicamentos."
+            ),
+        )
+
+        if nomenclator_file:
+            try:
+                nomenclator_df = nomenclator_aemps.leer_nomenclator_aemps(nomenclator_file)
+                st.session_state["maestro_medicamentos_aemps_df"] = nomenclator_df
+                st.session_state["maestro_medicamentos_aemps_nombre"] = nomenclator_file.name
+                _guardar_maestro_csv(nomenclator_df, MAESTRO_AEMPS_PATH)
+            except ValueError as error:
+                st.error(f"No se pudo leer el Nomenclátor AEMPS: {error}")
+
+    ministerio_df = st.session_state.get("maestro_ministerio_df")
+    manual_df = st.session_state.get("maestro_laboratorios_df")
+    aemps_df = st.session_state.get("maestro_medicamentos_aemps_df")
+    maestro_df = _obtener_maestro_laboratorios()
+
+    if ministerio_df is not None and not ministerio_df.empty:
+        m0, m1, m2, m3 = st.columns(4)
+        m0.metric("CN Ministerio", ministerio_df["cn"].nunique())
+        m1.metric("Labs Ministerio", ministerio_df["laboratorio_maestro"].nunique())
+        tipo_ministerio = (
+            ministerio_df["tipo_producto"].dropna().astype(str).str.strip().replace("", pd.NA).dropna().nunique()
+            if "tipo_producto" in ministerio_df.columns
+            else 0
+        )
+        m2.metric("Tipos Ministerio", tipo_ministerio)
+        desc_ministerio = (
+            ministerio_df["descripcion_maestra"].fillna("").astype(str).str.strip().ne("").sum()
+            if "descripcion_maestra" in ministerio_df.columns
+            else 0
+        )
+        m3.metric("CN con descripción", desc_ministerio)
+        st.caption(
+            f"Nomenclátor principal activo: {st.session_state.get('maestro_ministerio_nombre', 'nomenclátor cargado')}"
+        )
+        st.caption(f"Persistido en: {MAESTRO_MINISTERIO_PATH}")
+
+    if aemps_df is not None and not aemps_df.empty:
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Medicamentos AEMPS", aemps_df["cn"].nunique())
+        a2.metric("Labs AEMPS", aemps_df["laboratorio_maestro"].nunique())
+        cn_con_laboratorio = aemps_df["laboratorio_maestro"].fillna("").astype(str).str.strip().ne("").sum()
+        a3.metric("CN con laboratorio", cn_con_laboratorio)
+        st.caption(
+            f"Nomenclátor activo: {st.session_state.get('maestro_medicamentos_aemps_nombre', 'nomenclátor cargado')}"
+        )
+        st.caption(f"Persistido en: {MAESTRO_AEMPS_PATH}")
+        if cn_con_laboratorio < len(aemps_df):
+            st.warning(
+                "Hay códigos nacionales del Nomenclátor sin laboratorio resuelto. "
+                "Los seguiremos cargando, pero conviene revisar si el formato del zip ha cambiado."
+            )
+        else:
+            st.success(
+                "El zip del Nomenclátor AEMPS se ha cargado correctamente y los laboratorios se han resuelto."
+            )
+
+    if manual_df is not None and not manual_df.empty:
+        b1, b2 = st.columns(2)
+        b1.metric("Registros manuales", manual_df["cn"].nunique())
+        b2.metric("Labs manuales", manual_df["laboratorio_maestro"].nunique())
+        st.caption(
+            f"Base manual activa: {st.session_state.get('maestro_laboratorios_nombre', 'base manual cargada')}"
+        )
+        st.caption(f"Persistida en: {MAESTRO_MANUAL_PATH}")
+
+    if maestro_df is not None and not maestro_df.empty:
+        m1, m2 = st.columns(2)
+        m1.metric("Códigos nacionales totales", maestro_df["cn"].nunique())
+        m2.metric("Laboratorios totales", maestro_df["laboratorio_maestro"].dropna().nunique())
+        st.caption("Vista previa de la base maestra combinada")
+        st.dataframe(maestro_df.head(20))
+    else:
+        st.info(
+            "Todavía no hay base cargada. Lo ideal es empezar por el nomenclátor de facturación del Ministerio, "
+            "y luego completar con la base manual o con AEMPS si hace falta."
+        )
+
+
 def _leer_albaranes_genericos(uploaded_files, proveedor, tipo_compra):
     dfs = []
 
@@ -71,6 +290,7 @@ def _leer_albaranes_genericos(uploaded_files, proveedor, tipo_compra):
             df_temp["albaran"] = df_temp[col_albaran].apply(normalizar_albaran)
 
         df_temp = parse_sections(df_temp)
+        df_temp = _enriquecer_con_maestro(df_temp)
         dfs.append(df_temp)
 
     return dfs
@@ -279,34 +499,42 @@ def _resumen_bidafarma(
     if lineas_resumen.empty:
         return None
 
-    descripcion_norm = lineas_resumen.get("descripcion", "").astype(str).str.lower()
+    descripcion_norm = lineas_resumen.get("descripcion", "").astype(str).str.lower().str.strip()
+    seccion_norm = lineas_resumen.get("seccion_albaran", "").astype(str).str.lower().str.strip()
+    tipo_compra_norm = lineas_resumen.get("tipo_compra", "").astype(str).str.lower().str.strip()
 
-    mask_bitransfer = lineas_resumen["seccion_albaran"].eq("bitransfer")
-    mask_club = lineas_resumen["seccion_albaran"].eq("club")
-    mask_avantia = lineas_resumen["seccion_albaran"].eq("avantia") | descripcion_norm.str.contains("avantia", na=False)
+    mask_bitransfer = seccion_norm.eq("bitransfer")
+    mask_club = seccion_norm.eq("club")
+    mask_avantia = seccion_norm.eq("avantia") | descripcion_norm.str.contains("avantia", na=False)
     mask_goteo_puro = (
-        lineas_resumen["tipo_compra"].eq("goteo")
-        & lineas_resumen["seccion_albaran"].isin(["especialidad", "parafarmacia"])
+        tipo_compra_norm.eq("goteo")
+        & seccion_norm.isin(["especialidad", "parafarmacia"])
         & ~mask_bitransfer
         & ~mask_club
         & ~mask_avantia
     )
     mask_especialidad_normal = (
         mask_goteo_puro
-        & lineas_resumen["seccion_albaran"].eq("especialidad")
+        & seccion_norm.eq("especialidad")
         & lineas_resumen["bruto"].abs().le(96)
     )
-    mask_transfer = lineas_resumen["tipo_compra"].eq("transfer")
+    mask_transfer = tipo_compra_norm.eq("transfer")
 
     resumen_bloques = []
+
+    def _sumar_columna_real(bloque, columna):
+        serie = _serie_numerica(bloque, columna)
+        positivos = float(serie[serie > 0].sum())
+        negativos = float(serie[serie < 0].sum())
+        return positivos + negativos
 
     def agregar_bloque(nombre, mask, coste_extra=0.0):
         bloque = lineas_resumen[mask].copy()
         if bloque.empty:
             return None
 
-        bruto = float(bloque["bruto"].sum())
-        neto = float(bloque["neto"].sum())
+        bruto = _sumar_columna_real(bloque, "bruto")
+        neto = _sumar_columna_real(bloque, "neto")
         coste_real = neto + coste_extra
         descuento = _descuento_pct(bruto, coste_real)
         resumen_bloques.append({
@@ -346,7 +574,7 @@ def _resumen_bidafarma(
     )
     bloque_parafarmacia = agregar_bloque(
         "Parafarmacia normal",
-        mask_goteo_puro & lineas_resumen["seccion_albaran"].eq("parafarmacia"),
+        mask_goteo_puro & seccion_norm.eq("parafarmacia"),
         coste_extra=(
             (0.0 if not analisis_faceta else float(
                 analisis_faceta["detalle_tramo_fijo"]
@@ -608,6 +836,7 @@ def render_vida_pharma():
                 df_temp["albaran"] = df_temp[col_albaran].apply(normalizar_albaran)
 
             df_temp = parse_sections(df_temp)
+            df_temp = _enriquecer_con_maestro(df_temp)
             dfs.append(df_temp)
 
     # TRANSFER
@@ -625,6 +854,7 @@ def render_vida_pharma():
                 df_temp["albaran"] = df_temp[col_albaran].apply(normalizar_albaran)
 
             df_temp = parse_sections(df_temp)
+            df_temp = _enriquecer_con_maestro(df_temp)
             dfs.append(df_temp)
 
     if dfs:
@@ -960,6 +1190,7 @@ def render_vida_pharma():
                 if excel_compras_bitransfer:
                     try:
                         df_bt_compras = bitransfer.leer_listado_compras_bitransfer(excel_compras_bitransfer)
+                        df_bt_compras = _enriquecer_con_maestro(df_bt_compras)
 
                         st.subheader("📋 Listado de compras BitTransfer normalizado")
 
@@ -1058,6 +1289,7 @@ def render_vida_pharma():
                                 if excel_plataforma:
                                     try:
                                         df_plataforma = bitransfer.leer_listado_compras_bitransfer(excel_plataforma)
+                                        df_plataforma = _enriquecer_con_maestro(df_plataforma)
                                         st.dataframe(df_plataforma)
                                     except ValueError as error:
                                         st.error(
@@ -1215,6 +1447,9 @@ def render_vida_pharma():
 
 st.set_page_config(layout="wide")
 st.title("📊 Auditoría de Compras Farmacia")
+
+with st.expander("Base maestra CN / laboratorio", expanded=False):
+    _render_base_maestra_laboratorios()
 
 seccion_activa = st.radio(
     "Selecciona el apartado de trabajo",

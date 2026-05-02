@@ -26,6 +26,13 @@ COLUMNAS_DESCRIPCION = [
     "artículo",
 ]
 
+COLUMNAS_TIPO = [
+    "tipo",
+    "tipo_producto",
+    "categoria",
+    "categoría",
+]
+
 
 def normalizar_cn(valor):
     if pd.isna(valor):
@@ -64,6 +71,7 @@ def leer_maestro_laboratorios(file):
     col_cn = _buscar_columna(df.columns, COLUMNAS_CN)
     col_laboratorio = _buscar_columna(df.columns, COLUMNAS_LABORATORIO)
     col_descripcion = _buscar_columna(df.columns, COLUMNAS_DESCRIPCION)
+    col_tipo = _buscar_columna(df.columns, COLUMNAS_TIPO)
 
     if not col_cn or not col_laboratorio:
         raise ValueError(
@@ -76,6 +84,8 @@ def leer_maestro_laboratorios(file):
     resultado["descripcion_maestra"] = (
         df[col_descripcion].astype(str).str.strip() if col_descripcion else None
     )
+    if col_tipo:
+        resultado["tipo_producto"] = df[col_tipo].astype(str).str.strip()
 
     resultado = resultado.dropna(subset=["cn", "laboratorio_maestro"])
     resultado = resultado[resultado["cn"].str.len() > 0]
@@ -95,6 +105,10 @@ def enriquecer_con_laboratorio(df, maestro_df):
     columnas_merge = ["cn", "laboratorio_maestro"]
     if "descripcion_maestra" in maestro_df.columns:
         columnas_merge.append("descripcion_maestra")
+    if "tipo_producto" in maestro_df.columns:
+        columnas_merge.append("tipo_producto")
+    if "fuente_maestro" in maestro_df.columns:
+        columnas_merge.append("fuente_maestro")
 
     resultado = resultado.merge(
         maestro_df[columnas_merge],

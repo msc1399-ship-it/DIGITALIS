@@ -104,7 +104,7 @@ def leer_nomenclator_aemps(file):
 
             if not member_prescripcion:
                 raise ValueError(
-                    "El zip del Nomenclator AEMPS no contiene Prescripcion.xml."
+                    "El zip del Nomenclátor AEMPS no contiene Prescripcion.xml."
                 )
 
             prescripcion_rows = _row_dicts_from_xml_bytes(zf.read(member_prescripcion))
@@ -115,11 +115,11 @@ def leer_nomenclator_aemps(file):
         prescripcion_rows = _row_dicts_from_xml_bytes(raw)
     else:
         raise ValueError(
-            "Sube el zip oficial del Nomenclator AEMPS o el fichero Prescripcion.xml."
+            "Sube el zip oficial del Nomenclátor AEMPS o el fichero Prescripcion.xml."
         )
 
     if not prescripcion_rows:
-        raise ValueError("No se han encontrado registros en el Nomenclator AEMPS.")
+        raise ValueError("No se han encontrado registros en el Nomenclátor AEMPS.")
 
     lab_map = _build_laboratory_map(lab_rows)
 
@@ -153,7 +153,7 @@ def leer_nomenclator_aemps(file):
 
     if not registros:
         raise ValueError(
-            "No se pudieron extraer codigos nacionales validos del Nomenclator AEMPS."
+            "No se pudieron extraer códigos nacionales válidos del Nomenclátor AEMPS."
         )
 
     df = pd.DataFrame(registros)
