@@ -527,7 +527,7 @@ def _analisis_transfer_logistica(df_transfer, resultado_transfer):
             + detalle.loc[mask_elegible, "cargo_transfer_iva"]
         )
         detalle.loc[mask_elegible, "neto_con_cargo_transfer"] = (
-            detalle.loc[mask_elegible, "neto"] + detalle.loc[mask_elegible, "cargo_transfer_base"]
+            detalle.loc[mask_elegible, "neto"] + detalle.loc[mask_elegible, "cargo_transfer_total"]
         )
 
     bonificados = detalle["tiene_bonificacion_logistica"] & detalle["neto"].gt(0)
@@ -701,6 +701,7 @@ def _resumen_bidafarma(
     analisis_avantia=None,
     analisis_ajuste=None,
     analisis_cargo_adicional=None,
+    analisis_transfer=None,
 ):
     if df is None or df.empty:
         return None
@@ -817,7 +818,13 @@ def _resumen_bidafarma(
             resumen_bitransfer["coste_real_total_compras"] - resumen_bitransfer["importe_neto_compras"]
         ),
     )
-    bloque_transfer = agregar_bloque("Transfer", mask_transfer)
+    bloque_transfer = agregar_bloque(
+        "Transfer",
+        mask_transfer,
+        coste_extra=0.0 if not analisis_transfer else float(
+            analisis_transfer["detalle"]["cargo_transfer_total"].sum()
+        ),
+    )
     bloque_club = agregar_bloque(
         "Clubes",
         mask_club,
@@ -1710,6 +1717,7 @@ def render_vida_pharma():
         analisis_avantia=analisis_avantia,
         analisis_ajuste=analisis_ajuste,
         analisis_cargo_adicional=analisis_cargo_adicional,
+        analisis_transfer=analisis_transfer,
     )
 
     if resumen_final:
