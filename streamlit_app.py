@@ -364,6 +364,46 @@ def _normalizar_texto_match(valor):
     return re.sub(r"\s+", " ", texto).strip()
 
 
+def _tokens_significativos_laboratorio(laboratorio):
+    texto = _normalizar_texto_match(laboratorio)
+    if not texto:
+        return []
+
+    stopwords = {
+        "laboratorio",
+        "laboratorios",
+        "pharma",
+        "farma",
+        "iberica",
+        "iberico",
+        "grupo",
+        "medical",
+        "medic",
+        "medica",
+        "medico",
+        "productos",
+        "producto",
+        "sociedad",
+        "anonima",
+        "limitada",
+        "slu",
+        "sluu",
+        "sl",
+        "sa",
+        "s",
+        "l",
+        "u",
+        "a",
+        "de",
+        "del",
+        "la",
+        "el",
+    }
+
+    tokens = [token for token in texto.split() if token not in stopwords and len(token) >= 4]
+    return tokens
+
+
 def _detectar_laboratorios_bonificados(df_transfer, abonos_transfer):
     if (
         df_transfer is None
@@ -381,7 +421,22 @@ def _detectar_laboratorios_bonificados(df_transfer, abonos_transfer):
         .str.strip()
     )
     labs = labs[labs != ""].drop_duplicates().tolist()
-    labs_ordenados = sorted(labs, key=lambda x: len(str(x)), reverse=True)
+    firmas = []
+    for lab in labs:
+        lab_norm = _normalizar_texto_match(lab)
+        tokens = _tokens_significativos_laboratorio(lab)
+        firmas.append(
+            {
+                "laboratorio": lab,
+                "normalizado": lab_norm,
+                "tokens": tokens,
+            }
+        )
+    firmas = sorted(
+        firmas,
+        key=lambda item: (len(item["tokens"]), len(item["normalizado"])),
+        reverse=True,
+    )
 
     registros = []
     for _, fila in abonos_transfer.iterrows():
@@ -390,9 +445,17 @@ def _detectar_laboratorios_bonificados(df_transfer, abonos_transfer):
         importe = float(fila.get("importe", 0) or 0)
 
         labs_detectados = []
-        for lab in labs_ordenados:
-            lab_norm = _normalizar_texto_match(lab)
+        concepto_tokens = set(concepto_norm.split())
+        for firma in firmas:
+            lab = firma["laboratorio"]
+            lab_norm = firma["normalizado"]
+            tokens = firma["tokens"]
+
             if lab_norm and lab_norm in concepto_norm:
+                labs_detectados.append(lab)
+                continue
+
+            if tokens and any(token in concepto_tokens for token in tokens):
                 labs_detectados.append(lab)
 
         registros.append(
@@ -454,6 +517,7 @@ def _analisis_transfer_logistica(df_transfer, resultado_transfer):
     detalle["cargo_transfer_iva"] = 0.0
     detalle["cargo_transfer_total"] = 0.0
     detalle["neto_con_cargo_transfer"] = detalle["neto"]
+    detalle["abono_logistico_laboratorio"] = 0.0
 
     mask_elegible = (detalle["neto"] > 0) & (~detalle["tiene_bonificacion_logistica"])
     if mask_elegible.any():
@@ -471,10 +535,18 @@ def _analisis_transfer_logistica(df_transfer, resultado_transfer):
             detalle.loc[mask_elegible, "neto"] + detalle.loc[mask_elegible, "cargo_transfer_base"]
         )
 
+    bonificados = detalle["tiene_bonificacion_logistica"] & detalle["neto"].gt(0)
+    if bonificados.any():
+        detalle.loc[bonificados, "abono_logistico_laboratorio"] = (
+            detalle.loc[bonificados, "bruto"].abs() * 0.017
+        )
+        detalle.loc[bonificados, "neto_con_cargo_transfer"] = detalle.loc[bonificados, "neto"]
+
     detalle["cargo_transfer_base"] = detalle["cargo_transfer_base"].round(4)
     detalle["cargo_transfer_iva"] = detalle["cargo_transfer_iva"].round(4)
     detalle["cargo_transfer_total"] = detalle["cargo_transfer_total"].round(4)
     detalle["neto_con_cargo_transfer"] = detalle["neto_con_cargo_transfer"].round(4)
+    detalle["abono_logistico_laboratorio"] = detalle["abono_logistico_laboratorio"].round(4)
 
     base_elegible = float(detalle.loc[mask_elegible, "bruto"].abs().sum())
     base_teorica = float(detalle["bruto"].abs().sum())
@@ -1615,6 +1687,7 @@ def render_vida_pharma():
                                 "bruto",
                                 "neto",
                                 "tiene_bonificacion_logistica",
+                                "abono_logistico_laboratorio",
                                 "cargo_transfer_base",
                                 "cargo_transfer_iva",
                                 "cargo_transfer_total",
