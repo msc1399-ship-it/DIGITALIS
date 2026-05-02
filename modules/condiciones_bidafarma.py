@@ -80,6 +80,8 @@ CONDICIONES_BIDAFARMA = {
 
 
 def _normalizar_texto(valor):
+    if pd.isna(valor):
+        return ""
     texto = str(valor).strip().upper()
     texto = unicodedata.normalize("NFKD", texto)
     return "".join(c for c in texto if not unicodedata.combining(c))
@@ -129,7 +131,10 @@ def extraer_acronimos(df):
 
     for serie in _series_texto(df, candidatos):
         for valor in serie:
-            for match in patron.findall(str(valor)):
+            texto = _normalizar_texto(valor)
+            if not texto:
+                continue
+            for match in patron.findall(texto):
                 acronimo = _normalizar_texto(match)
                 if acronimo in CONDICIONES_BIDAFARMA:
                     contador[acronimo] += 1
@@ -141,7 +146,10 @@ def extraer_acronimos(df):
         if pd.api.types.is_numeric_dtype(df[columna]):
             continue
         for valor in df[columna].astype(str):
-            for match in patron.findall(valor):
+            texto = _normalizar_texto(valor)
+            if not texto:
+                continue
+            for match in patron.findall(texto):
                 acronimo = _normalizar_texto(match)
                 if acronimo in CONDICIONES_BIDAFARMA:
                     contador[acronimo] += 1
