@@ -1589,6 +1589,7 @@ def render_vida_pharma():
         # -------------------------
         # FACTURA TRANSFER
         # -------------------------
+        analisis_transfer = None
         factura_transfer = st.file_uploader("Factura TRANSFER", type=["xlsx"], key="bidafarma_factura_transfer")
         st.session_state["factura_transfer_bidafarma"] = factura_transfer.name if factura_transfer else None
 
