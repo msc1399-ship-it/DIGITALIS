@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 import importlib
+import unicodedata
 from pathlib import Path
 
 from modules.ingestion import load_excel
@@ -351,6 +352,160 @@ def _descuento_pct(bruto_total, coste_total):
     if bruto_total <= 0:
         return 0.0
     return round((1 - (coste_total / bruto_total)) * 100, 2)
+
+
+def _normalizar_texto_match(valor):
+    if pd.isna(valor):
+        return ""
+    texto = str(valor).strip().lower()
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+    texto = re.sub(r"[^a-z0-9]+", " ", texto)
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def _detectar_laboratorios_bonificados(df_transfer, abonos_transfer):
+    if (
+        df_transfer is None
+        or df_transfer.empty
+        or abonos_transfer is None
+        or abonos_transfer.empty
+        or "laboratorio_maestro" not in df_transfer.columns
+    ):
+        return {"laboratorios": [], "detalle": pd.DataFrame()}
+
+    labs = (
+        df_transfer["laboratorio_maestro"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
+    labs = labs[labs != ""].drop_duplicates().tolist()
+    labs_ordenados = sorted(labs, key=lambda x: len(str(x)), reverse=True)
+
+    registros = []
+    for _, fila in abonos_transfer.iterrows():
+        concepto = str(fila.get("concepto", "")).strip()
+        concepto_norm = _normalizar_texto_match(concepto)
+        importe = float(fila.get("importe", 0) or 0)
+
+        labs_detectados = []
+        for lab in labs_ordenados:
+            lab_norm = _normalizar_texto_match(lab)
+            if lab_norm and lab_norm in concepto_norm:
+                labs_detectados.append(lab)
+
+        registros.append(
+            {
+                "concepto": concepto,
+                "importe": round(importe, 2),
+                "laboratorios_detectados": ", ".join(labs_detectados),
+            }
+        )
+
+    detalle = pd.DataFrame(registros)
+    laboratorios = sorted(
+        {
+            lab.strip()
+            for labs_texto in detalle["laboratorios_detectados"].fillna("")
+            for lab in str(labs_texto).split(",")
+            if lab.strip()
+        }
+    )
+
+    return {"laboratorios": laboratorios, "detalle": detalle}
+
+
+def _analisis_transfer_logistica(df_transfer, resultado_transfer):
+    if df_transfer is None or df_transfer.empty or not resultado_transfer:
+        return None
+
+    detalle = df_transfer.copy()
+    detalle["bruto"] = _serie_numerica(detalle, "bruto")
+    detalle["neto"] = _serie_numerica(detalle, "neto")
+    detalle["unidades"] = _serie_numerica(detalle, "unidades")
+    if "albaran" in detalle.columns:
+        detalle["albaran"] = detalle["albaran"].apply(normalizar_albaran)
+    else:
+        detalle["albaran"] = None
+
+    detalle = detalle[detalle["bruto"] != 0].copy()
+    if detalle.empty:
+        return None
+
+    abonos_transfer = resultado_transfer.get("abonos", pd.DataFrame()).copy()
+    deteccion = _detectar_laboratorios_bonificados(detalle, abonos_transfer)
+    laboratorios_bonificados = deteccion["laboratorios"]
+
+    albaranes_bonificados = set()
+    if laboratorios_bonificados and "laboratorio_maestro" in detalle.columns:
+        albaranes_bonificados = set(
+            detalle.loc[
+                detalle["laboratorio_maestro"].astype(str).isin(laboratorios_bonificados),
+                "albaran",
+            ]
+            .dropna()
+            .astype(str)
+            .tolist()
+        )
+
+    detalle["tiene_bonificacion_logistica"] = detalle["albaran"].astype(str).isin(albaranes_bonificados)
+    detalle["cargo_transfer_base"] = 0.0
+    detalle["cargo_transfer_iva"] = 0.0
+    detalle["cargo_transfer_total"] = 0.0
+    detalle["neto_con_cargo_transfer"] = detalle["neto"]
+
+    mask_elegible = (detalle["neto"] > 0) & (~detalle["tiene_bonificacion_logistica"])
+    if mask_elegible.any():
+        detalle.loc[mask_elegible, "cargo_transfer_base"] = (
+            detalle.loc[mask_elegible, "bruto"].abs() * 0.017
+        )
+        detalle.loc[mask_elegible, "cargo_transfer_iva"] = (
+            detalle.loc[mask_elegible, "cargo_transfer_base"] * 0.21
+        )
+        detalle.loc[mask_elegible, "cargo_transfer_total"] = (
+            detalle.loc[mask_elegible, "cargo_transfer_base"]
+            + detalle.loc[mask_elegible, "cargo_transfer_iva"]
+        )
+        detalle.loc[mask_elegible, "neto_con_cargo_transfer"] = (
+            detalle.loc[mask_elegible, "neto"] + detalle.loc[mask_elegible, "cargo_transfer_base"]
+        )
+
+    detalle["cargo_transfer_base"] = detalle["cargo_transfer_base"].round(4)
+    detalle["cargo_transfer_iva"] = detalle["cargo_transfer_iva"].round(4)
+    detalle["cargo_transfer_total"] = detalle["cargo_transfer_total"].round(4)
+    detalle["neto_con_cargo_transfer"] = detalle["neto_con_cargo_transfer"].round(4)
+
+    base_elegible = float(detalle.loc[mask_elegible, "bruto"].abs().sum())
+    base_teorica = float(detalle["bruto"].abs().sum())
+    cargo_base_teorico = float(detalle["cargo_transfer_base"].sum())
+    cargo_iva_teorico = float(detalle["cargo_transfer_iva"].sum())
+    cargo_total_teorico = float(detalle["cargo_transfer_total"].sum())
+
+    resumen_factura = resultado_transfer.get("resumen_logistica", {}) or {}
+    base_factura = float(resumen_factura.get("base", 0) or 0)
+    iva_factura = float(resumen_factura.get("iva", 0) or 0)
+    total_factura = float(resumen_factura.get("total", 0) or 0)
+
+    return {
+        "detalle": detalle,
+        "abonos_detectados": deteccion["detalle"],
+        "resumen": {
+            "laboratorios_bonificados": laboratorios_bonificados,
+            "albaranes_bonificados": sorted(albaranes_bonificados),
+            "base_teorica_total": round(base_teorica, 2),
+            "base_elegible": round(base_elegible, 2),
+            "cargo_base_teorico": round(cargo_base_teorico, 2),
+            "cargo_iva_teorico": round(cargo_iva_teorico, 2),
+            "cargo_total_teorico": round(cargo_total_teorico, 2),
+            "base_factura": round(base_factura, 2),
+            "iva_factura": round(iva_factura, 2),
+            "total_factura": round(total_factura, 2),
+            "diferencia_base": round(base_factura - cargo_base_teorico, 2),
+            "diferencia_total": round(total_factura - cargo_total_teorico, 2),
+            "lineas_elegibles": int(mask_elegible.sum()),
+        },
+    }
 
 
 def _lineas_elegibles_goteo_puro(df):
@@ -1399,6 +1554,76 @@ def render_vida_pharma():
                 col1.metric("Base", f"{resumen['base']} €")
                 col2.metric("IVA (21%)", f"{resumen['iva']} €")
                 col3.metric("TOTAL", f"{resumen['total']} €")
+
+            analisis_transfer = _analisis_transfer_logistica(df_transfer, resultado_transfer)
+            if analisis_transfer:
+                resumen_transfer = analisis_transfer["resumen"]
+
+                st.subheader("🧮 Imputación logística transfer")
+
+                t1, t2, t3, t4, t5 = st.columns(5)
+                t1.metric("Base elegible", f"{resumen_transfer['base_elegible']:.2f} €")
+                t2.metric("Cargo teórico 1,7%", f"{resumen_transfer['cargo_base_teorico']:.2f} €")
+                t3.metric("IVA teórico 21%", f"{resumen_transfer['cargo_iva_teorico']:.2f} €")
+                t4.metric("Total teórico", f"{resumen_transfer['cargo_total_teorico']:.2f} €")
+                t5.metric("Líneas con cargo", resumen_transfer["lineas_elegibles"])
+
+                t6, t7, t8, t9 = st.columns(4)
+                t6.metric("Base factura", f"{resumen_transfer['base_factura']:.2f} €")
+                t7.metric("IVA factura", f"{resumen_transfer['iva_factura']:.2f} €")
+                t8.metric("Total factura", f"{resumen_transfer['total_factura']:.2f} €")
+                t9.metric("Dif. total", f"{resumen_transfer['diferencia_total']:.2f} €")
+
+                if resumen_transfer["laboratorios_bonificados"]:
+                    st.caption(
+                        "Laboratorios bonificados detectados: "
+                        + ", ".join(resumen_transfer["laboratorios_bonificados"])
+                    )
+                if resumen_transfer["albaranes_bonificados"]:
+                    st.caption(
+                        "Albaranes sin cargo por bonificación logística: "
+                        + ", ".join(map(str, resumen_transfer["albaranes_bonificados"]))
+                    )
+
+                if abs(resumen_transfer["diferencia_total"]) <= 0.05:
+                    st.success(
+                        "El cargo teórico de transfer, incluyendo IVA, cuadra con la factura."
+                    )
+                else:
+                    st.warning(
+                        "El cálculo teórico de transfer no cuadra todavía con la factura. "
+                        "Revisa si falta algún laboratorio por reconocer en la base maestra "
+                        "o si la factura incluye una bonificación logística adicional."
+                    )
+
+                if not analisis_transfer["abonos_detectados"].empty:
+                    st.caption("Abonos de factura y laboratorios detectados")
+                    st.dataframe(analisis_transfer["abonos_detectados"])
+
+                st.caption(
+                    "Detalle de líneas transfer: solo se aplica cargo al transfer real, "
+                    "sin abonos y excluyendo albaranes bonificados."
+                )
+                st.dataframe(
+                    analisis_transfer["detalle"][
+                        [
+                            col for col in [
+                                "albaran",
+                                "cn",
+                                "descripcion",
+                                "laboratorio_maestro",
+                                "bruto",
+                                "neto",
+                                "tiene_bonificacion_logistica",
+                                "cargo_transfer_base",
+                                "cargo_transfer_iva",
+                                "cargo_transfer_total",
+                                "neto_con_cargo_transfer",
+                            ]
+                            if col in analisis_transfer["detalle"].columns
+                        ]
+                    ]
+                )
 
     # =========================
     # INICIO
