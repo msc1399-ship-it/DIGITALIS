@@ -439,6 +439,7 @@ def _detectar_laboratorios_bonificados(df_transfer, abonos_transfer):
     )
 
     registros = []
+    laboratorios_detectados_total = set()
     for _, fila in abonos_transfer.iterrows():
         concepto = str(fila.get("concepto", "")).strip()
         concepto_norm = _normalizar_texto_match(concepto)
@@ -458,23 +459,17 @@ def _detectar_laboratorios_bonificados(df_transfer, abonos_transfer):
             if tokens and any(token in concepto_tokens for token in tokens):
                 labs_detectados.append(lab)
 
+        laboratorios_detectados_total.update(labs_detectados)
         registros.append(
             {
                 "concepto": concepto,
                 "importe": round(importe, 2),
-                "laboratorios_detectados": ", ".join(labs_detectados),
+                "laboratorios_detectados": " | ".join(labs_detectados),
             }
         )
 
     detalle = pd.DataFrame(registros)
-    laboratorios = sorted(
-        {
-            lab.strip()
-            for labs_texto in detalle["laboratorios_detectados"].fillna("")
-            for lab in str(labs_texto).split(",")
-            if lab.strip()
-        }
-    )
+    laboratorios = sorted(laboratorios_detectados_total)
 
     return {"laboratorios": laboratorios, "detalle": detalle}
 
