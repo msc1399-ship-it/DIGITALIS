@@ -38,6 +38,7 @@ SECCIONES = [
     "hefame",
     "Facturas laboratorios",
     "Ventas farmacia",
+    "Stock",
     "Resumen",
 ]
 
@@ -976,6 +977,101 @@ def render_ventas_farmacia():
         st.info("Sube aquí los Excel de ventas de la farmacia. Más adelante añadiremos su normalización.")
 
 
+def _normalizar_stock_farmacia(df):
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["cn", "descripcion", "unidades_stock", "caducidad", "ultima_compra"])
+
+    trabajo = df.copy()
+    trabajo.columns = [str(c).strip().lower() for c in trabajo.columns]
+
+    def buscar_columna(*patrones):
+        for columna in trabajo.columns:
+            nombre = str(columna).strip().lower()
+            if all(patron in nombre for patron in patrones):
+                return columna
+        return None
+
+    col_cn = buscar_columna("codigo", "nacional") or buscar_columna("código", "nacional") or buscar_columna("cn")
+    col_descripcion = buscar_columna("descripcion") or buscar_columna("descripción") or buscar_columna("producto")
+    col_unidades = buscar_columna("unidad") or buscar_columna("stock") or buscar_columna("existencia")
+    col_caducidad = buscar_columna("caduc")
+    col_ultima_compra = buscar_columna("ultima", "compra") or buscar_columna("última", "compra") or buscar_columna("fecha", "compra")
+
+    resultado = pd.DataFrame()
+    resultado["cn"] = trabajo[col_cn] if col_cn else None
+    resultado["descripcion"] = trabajo[col_descripcion] if col_descripcion else None
+    resultado["unidades_stock"] = pd.to_numeric(trabajo[col_unidades], errors="coerce") if col_unidades else None
+    resultado["caducidad"] = pd.to_datetime(trabajo[col_caducidad], errors="coerce") if col_caducidad else pd.NaT
+    resultado["ultima_compra"] = pd.to_datetime(trabajo[col_ultima_compra], errors="coerce") if col_ultima_compra else pd.NaT
+
+    if "cn" in resultado.columns:
+        resultado["cn"] = (
+            resultado["cn"]
+            .astype(str)
+            .str.strip()
+            .replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+        )
+
+    if "descripcion" in resultado.columns:
+        resultado["descripcion"] = resultado["descripcion"].astype(str).str.strip()
+
+    resultado = resultado.dropna(how="all")
+    resultado = _enriquecer_con_maestro(resultado)
+    return resultado.reset_index(drop=True)
+
+
+
+def render_stock():
+    st.header("Stock")
+    archivo = st.file_uploader(
+        "Sube el stock de la farmacia",
+        type=["xlsx", "xls", "csv"],
+        key="stock_farmacia_excel",
+    )
+
+    df_stock = None
+    if archivo:
+        try:
+            df_stock = _normalizar_stock_farmacia(load_excel(archivo))
+            _guardar_dataset("stock_farmacia_df", df_stock)
+            st.session_state["stock_farmacia"] = archivo.name
+        except ValueError as error:
+            st.error(f"No se pudo leer el stock de la farmacia: {error}")
+            return
+
+    if df_stock is None:
+        df_stock = st.session_state.get("stock_farmacia_df")
+
+    if df_stock is not None and not df_stock.empty:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Referencias", int(df_stock["cn"].dropna().nunique()) if "cn" in df_stock.columns else len(df_stock))
+        c2.metric("Unidades stock", int(df_stock["unidades_stock"].fillna(0).sum()) if "unidades_stock" in df_stock.columns else 0)
+        c3.metric("Con caducidad", int(df_stock["caducidad"].notna().sum()) if "caducidad" in df_stock.columns else 0)
+        c4.metric("Con última compra", int(df_stock["ultima_compra"].notna().sum()) if "ultima_compra" in df_stock.columns else 0)
+
+        columnas = [
+            col for col in [
+                "cn",
+                "descripcion",
+                "laboratorio_maestro",
+                "tipo_producto",
+                "unidades_stock",
+                "caducidad",
+                "ultima_compra",
+            ]
+            if col in df_stock.columns
+        ]
+        st.dataframe(df_stock[columnas])
+        st.info(
+            "Esta subida queda preparada para el siguiente paso: análisis ABCD, artículos con menor rotación, "
+            "stock parado y productos próximos a caducar."
+        )
+    else:
+        st.info(
+            "Sube aquí el Excel de stock con código nacional, descripción, unidades, caducidad y última compra."
+        )
+
+
 def render_resumen():
     st.header("Resumen")
 
@@ -999,6 +1095,13 @@ def render_resumen():
         "seccion": "Ventas farmacia",
         "lineas_albaranes": len(st.session_state.get("ventas_farmacia", [])),
         "factura_normal": "",
+        "factura_transfer": "",
+    })
+    stock_df = st.session_state.get("stock_farmacia_df")
+    filas.append({
+        "seccion": "Stock",
+        "lineas_albaranes": 0 if stock_df is None else len(stock_df),
+        "factura_normal": st.session_state.get("stock_farmacia") or "",
         "factura_transfer": "",
     })
 
@@ -1770,5 +1873,7 @@ elif seccion_activa == "Facturas laboratorios":
     render_facturas_laboratorios()
 elif seccion_activa == "Ventas farmacia":
     render_ventas_farmacia()
+elif seccion_activa == "Stock":
+    render_stock()
 elif seccion_activa == "Resumen":
     render_resumen()
